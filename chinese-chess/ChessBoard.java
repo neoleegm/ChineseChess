@@ -148,8 +148,8 @@ public class ChessBoard implements Cloneable {
     
     private boolean isValidMove(ChessPiece piece, int fromRow, int fromCol, int toRow, int toCol) {
         return switch (piece.getType()) {
-            case KING -> isValidKingMove(piece, toRow, toCol);
-            case ADVISOR -> isValidAdvisorMove(piece, toRow, toCol);
+            case KING -> isValidKingMove(piece, fromRow, fromCol, toRow, toCol);
+            case ADVISOR -> isValidAdvisorMove(piece, fromRow, fromCol, toRow, toCol);
             case ELEPHANT -> isValidElephantMove(piece, fromRow, fromCol, toRow, toCol);
             case HORSE -> isValidHorseMove(fromRow, fromCol, toRow, toCol);
             case ROOK -> isValidRookMove(fromRow, fromCol, toRow, toCol);
@@ -158,16 +158,17 @@ public class ChessBoard implements Cloneable {
         };
     }
     
-    private boolean isValidKingMove(ChessPiece piece, int toRow, int toCol) {
+    private boolean isValidKingMove(ChessPiece piece, int fromRow, int fromCol, int toRow, int toCol) {
         if (toCol < 3 || toCol > 5) return false;
         if (piece.isRed() ? (toRow < 7 || toRow > 9) : (toRow < 0 || toRow > 2)) return false;
-        return true;
+        int dr = Math.abs(toRow - fromRow), dc = Math.abs(toCol - fromCol);
+        return (dr == 1 && dc == 0) || (dr == 0 && dc == 1);
     }
     
-    private boolean isValidAdvisorMove(ChessPiece piece, int toRow, int toCol) {
+    private boolean isValidAdvisorMove(ChessPiece piece, int fromRow, int fromCol, int toRow, int toCol) {
         if (toCol < 3 || toCol > 5) return false;
         if (piece.isRed() ? (toRow < 7 || toRow > 9) : (toRow < 0 || toRow > 2)) return false;
-        return true;
+        return Math.abs(toRow - fromRow) == 1 && Math.abs(toCol - fromCol) == 1;
     }
     
     private boolean isValidElephantMove(ChessPiece piece, int fromRow, int fromCol, int toRow, int toCol) {

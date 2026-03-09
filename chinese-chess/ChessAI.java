@@ -1,7 +1,7 @@
 import java.util.*;
 
 /**
- * 象棋AI类
+ * 象棋AI类 - 优化版
  */
 public class ChessAI {
     public enum Difficulty { EASY, MEDIUM, HARD }
@@ -19,6 +19,7 @@ public class ChessAI {
         ChessPiece.Type.PAWN, 100
     );
     
+    // 兵卒位置价值表（越靠近对方底线价值越高）
     private static final int[][] PAWN_BONUS = {
         {0,0,0,0,0,0,0,0,0}, {0,0,0,0,0,0,0,0,0}, {0,0,0,0,0,0,0,0,0}, {0,0,0,0,0,0,0,0,0}, {0,0,0,0,0,0,0,0,0},
         {20,20,20,30,40,30,20,20,20}, {30,30,40,50,60,50,40,30,30},
@@ -38,120 +39,144 @@ public class ChessAI {
         };
     }
     
+    // 简单：优先吃子，随机走
     private int[] getEasyMove(ChessBoard board) {
         List<int[]> moves = getAllMoves(board, false);
         if (moves.isEmpty()) return null;
         
         List<int[]> captures = new ArrayList<>();
-        List<int[]> normals = new ArrayList<>();
+        List<int[]> goodMoves = new ArrayList<>();
         
         for (int[] m : moves) {
-            (board.getPiece(m[2], m[3]) != null ? captures : normals).add(m);
+            ChessPiece target = board.getPiece(m[2], m[3]);
+            if (target != null) {
+                captures.add(m);
+            } else if (isGoodPosition(m)) {
+                goodMoves.add(m);
+            }
         }
         
-        if (!captures.isEmpty() && random.nextDouble() < 0.7) {
+        // 80%吃子，20%走好位置
+        if (!captures.isEmpty() && random.nextDouble() < 0.8) {
             return captures.get(random.nextInt(captures.size()));
         }
-        return normals.isEmpty() ? moves.get(random.nextInt(moves.size())) 
-                                 : normals.get(random.nextInt(normals.size()));
+        if (!goodMoves.isEmpty()) {
+            return goodMoves.get(random.nextInt(goodMoves.size()));
+        }
+        return moves.get(random.nextInt(moves.size()));
     }
     
+    // 中等：评估局面选择最优
     private int[] getMediumMove(ChessBoard board) {
         List<int[]> moves = getAllMoves(board, false);
         if (moves.isEmpty()) return null;
         
         int bestScore = Integer.MIN_VALUE;
-        for (int[] m : moves) {
-            bestScore = Math.max(bestScore, evaluateMove(board, m));
-        }
+        List<int[]> bestMoves = new ArrayList<>();
         
-        List<int[]> topMoves = new ArrayList<>();
         for (int[] m : moves) {
-            if (evaluateMove(board, m) >= bestScore - 50) topMoves.add(m);
+            int score = evaluateQuick(board, m);
+            if (score > bestScore) {
+                bestScore = score;
+                bestMoves.clear();
+                bestMoves.add(m);
+            } else if (score == bestScore) {
+                bestMoves.add(m);
+            }
         }
-        return topMoves.get(random.nextInt(topMoves.size()));
+        return bestMoves.get(random.nextInt(bestMoves.size()));
     }
     
+    // 困难：评估更细致，考虑对方回应
     private int[] getHardMove(ChessBoard board) {
         List<int[]> moves = getAllMoves(board, false);
         if (moves.isEmpty()) return null;
         
-        int[] bestMove = null;
         int bestScore = Integer.MIN_VALUE;
+        List<int[]> bestMoves = new ArrayList<>();
         
         for (int[] m : moves) {
-            ChessBoard sim = board.clone();
-            sim.movePiece(m[0], m[1], m[2], m[3]);
-            int score = minimax(sim, 2, Integer.MIN_VALUE, Integer.MAX_VALUE, false);
+            // 快速评估走法
+            int score = evaluateQuick(board, m);
+            
+            // 如果是吃子，额外加分
+            ChessPiece captured = board.getPiece(m[2], m[3]);
+            if (captured != null) {
+                score += VALUES.getOrDefault(captured.getType(), 0);
+            }
+            
+            // 检查移动后是否会被对方吃掉（简单的安全性检查）
+            if (isSafeMove(board, m)) {
+                score += 50; // 安全走法加分
+            }
+            
             if (score > bestScore) {
                 bestScore = score;
-                bestMove = m;
+                bestMoves.clear();
+                bestMoves.add(m);
+            } else if (score == bestScore) {
+                bestMoves.add(m);
             }
         }
-        return bestMove != null ? bestMove : moves.get(0);
+        return bestMoves.get(random.nextInt(bestMoves.size()));
     }
     
-    private int minimax(ChessBoard board, int depth, int alpha, int beta, boolean isMax) {
-        if (depth == 0 || board.isGameOver()) return evaluateBoard(board);
+    // 快速评估（不走棋，直接计算）
+    private int evaluateQuick(ChessBoard board, int[] move) {
+        ChessPiece piece = board.getPiece(move[0], move[1]);
+        ChessPiece target = board.getPiece(move[2], move[3]);
         
-        List<int[]> moves = getAllMoves(board, board.isRedTurn());
-        if (moves.isEmpty()) return evaluateBoard(board);
-        
-        if (isMax) {
-            int maxScore = Integer.MIN_VALUE;
-            for (int[] m : moves) {
-                ChessBoard sim = board.clone();
-                sim.movePiece(m[0], m[1], m[2], m[3]);
-                maxScore = Math.max(maxScore, minimax(sim, depth - 1, alpha, beta, false));
-                alpha = Math.max(alpha, maxScore);
-                if (beta <= alpha) break;
-            }
-            return maxScore;
-        } else {
-            int minScore = Integer.MAX_VALUE;
-            for (int[] m : moves) {
-                ChessBoard sim = board.clone();
-                sim.movePiece(m[0], m[1], m[2], m[3]);
-                minScore = Math.min(minScore, minimax(sim, depth - 1, alpha, beta, true));
-                beta = Math.min(beta, minScore);
-                if (beta <= alpha) break;
-            }
-            return minScore;
-        }
-    }
-    
-    private int evaluateMove(ChessBoard board, int[] move) {
-        ChessBoard sim = board.clone();
-        sim.movePiece(move[0], move[1], move[2], move[3]);
-        return evaluateBoard(sim);
-    }
-    
-    private int evaluateBoard(ChessBoard board) {
         int score = 0;
-        for (int r = 0; r < ChessBoard.ROWS; r++) {
-            for (int c = 0; c < ChessBoard.COLS; c++) {
-                ChessPiece p = board.getPiece(r, c);
-                if (p != null) {
-                    int v = getValue(p, r, c);
-                    score += p.isRed() ? -v : v;
-                }
-            }
+        
+        // 吃子价值
+        if (target != null) {
+            score += VALUES.getOrDefault(target.getType(), 0) * 2;
         }
+        
+        // 位置价值
+        if (piece.getType() == ChessPiece.Type.PAWN) {
+            score += piece.isRed() ? PAWN_BONUS[move[2]][move[3]] : PAWN_BONUS[9 - move[2]][move[3]];
+        }
+        
+        // 控制中心加分
+        if (move[2] >= 3 && move[2] <= 6 && move[3] >= 2 && move[3] <= 6) {
+            score += 30;
+        }
+        
+        // 前进加分（黑方向下，行号增加）
+        score += (move[2] - move[0]) * 10;
+        
         return score;
     }
     
-    private int getValue(ChessPiece p, int r, int c) {
-        int v = VALUES.getOrDefault(p.getType(), 0);
-        if (p.getType() == ChessPiece.Type.PAWN) {
-            v += p.isRed() ? PAWN_BONUS[r][c] : PAWN_BONUS[9 - r][c];
-        } else if (p.getType() == ChessPiece.Type.ROOK) {
-            v += 10;
-        } else if (p.getType() == ChessPiece.Type.KING && c >= 3 && c <= 5) {
-            v += 50;
+    // 检查是否为安全位置（简单检查）
+    private boolean isSafeMove(ChessBoard board, int[] move) {
+        // 检查目标位置是否会被对方任何棋子攻击
+        // 简化：检查周围是否有对方棋子
+        for (int dr = -2; dr <= 2; dr++) {
+            for (int dc = -2; dc <= 2; dc++) {
+                int r = move[2] + dr, c = move[3] + dc;
+                if (r >= 0 && r < 10 && c >= 0 && c < 9) {
+                    ChessPiece p = board.getPiece(r, c);
+                    if (p != null && p.isRed()) { // 红方棋子
+                        // 简化检查：不实际计算能否攻击
+                        if (Math.abs(dr) <= 1 && Math.abs(dc) <= 1) {
+                            return false; // 附近有对方棋子，认为不安全
+                        }
+                    }
+                }
+            }
         }
-        return v;
+        return true;
     }
     
+    // 判断是否为好位置
+    private boolean isGoodPosition(int[] move) {
+        // 向前的走法更好
+        return move[2] > move[0];
+    }
+    
+    // 获取所有合法走法
     private List<int[]> getAllMoves(ChessBoard board, boolean isRed) {
         List<int[]> moves = new ArrayList<>();
         for (int fr = 0; fr < ChessBoard.ROWS; fr++) {

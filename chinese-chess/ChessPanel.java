@@ -136,6 +136,11 @@ public class ChessPanel extends JPanel {
         
         updateStatus();
         repaint();
+        
+        // 如果悔棋后轮到AI走棋，立即触发AI
+        if (mode == GameMode.PVE && board.isRedTurn() != playerIsRed) {
+            makeAIMove();
+        }
     }
     
     private void playSound(boolean capture) {

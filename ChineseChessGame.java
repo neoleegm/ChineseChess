@@ -1,6 +1,8 @@
 import javax.swing.*;
 import java.awt.*;
+import java.awt.event.*;
 
+@SuppressWarnings({"serial", "this-escape"})
 public class ChineseChessGame extends JFrame {
     private static final Color BG = new Color(245, 243, 240);
     private static final Color SIDEBAR = new Color(50, 50, 55);
@@ -60,22 +62,24 @@ public class ChineseChessGame extends JFrame {
                              {"AI 难度", "简单", "中等", "困难"},
                              {"执棋方", "红方", "黑方"}};
         
-        JComboBox<String>[] combos = new JComboBox[3];
+        java.util.List<JComboBox<String>> comboList = new java.util.ArrayList<>();
         for (int i = 0; i < 3; i++) {
-            content.add(createRow(options[i][0], combos[i] = createCombo(java.util.Arrays.copyOfRange(options[i], 1, options[i].length))));
+            JComboBox<String> combo = createCombo(java.util.Arrays.copyOfRange(options[i], 1, options[i].length));
+            comboList.add(combo);
+            content.add(createRow(options[i][0], combo));
             content.add(Box.createVerticalStrut(12));
         }
         
-        combos[0].addActionListener(e -> {
-            boolean isPVE = combos[0].getSelectedIndex() == 0;
-            combos[1].setEnabled(isPVE);
-            combos[2].setEnabled(isPVE);
+        comboList.get(0).addActionListener(e -> {
+            boolean isPVE = comboList.get(0).getSelectedIndex() == 0;
+            comboList.get(1).setEnabled(isPVE);
+            comboList.get(2).setEnabled(isPVE);
             chessPanel.setGameMode(isPVE ? ChessPanel.GameMode.PVE : ChessPanel.GameMode.PVP);
         });
-        combos[1].setSelectedIndex(1);
-        combos[1].addActionListener(e -> chessPanel.setDifficulty(
-            switch (combos[1].getSelectedIndex()) { case 0 -> ChessAI.Difficulty.EASY; case 2 -> ChessAI.Difficulty.HARD; default -> ChessAI.Difficulty.MEDIUM; }));
-        combos[2].addActionListener(e -> chessPanel.setPlayerSide(combos[2].getSelectedIndex() == 0));
+        comboList.get(1).setSelectedIndex(1);
+        comboList.get(1).addActionListener(e -> chessPanel.setDifficulty(
+            switch (comboList.get(1).getSelectedIndex()) { case 0 -> ChessAI.Difficulty.EASY; case 2 -> ChessAI.Difficulty.HARD; default -> ChessAI.Difficulty.MEDIUM; }));
+        comboList.get(2).addActionListener(e -> chessPanel.setPlayerSide(comboList.get(2).getSelectedIndex() == 0));
         
         JSeparator sep = new JSeparator();
         sep.setForeground(new Color(80, 80, 85));

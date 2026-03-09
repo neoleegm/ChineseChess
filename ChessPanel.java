@@ -3,7 +3,9 @@ import java.awt.*;
 import java.awt.event.*;
 import java.awt.image.BufferedImage;
 
+@SuppressWarnings({"serial", "this-escape"})
 public class ChessPanel extends JPanel {
+    private static final long serialVersionUID = 1L;
     private static final int CELL = 65;
     private static final int RADIUS = 28;
     private static final int MARGIN = 55;
@@ -267,7 +269,7 @@ public class ChessPanel extends JPanel {
         g.drawLine(lx, sy + 7 * CELL, rx, ey);
         g.drawLine(rx, sy + 7 * CELL, lx, ey);
         
-        g.setFont(new Font("KaiTi", Font.BOLD, (int)(42)));
+        g.setFont(new Font("KaiTi", Font.BOLD, 42));
         g.setColor(new Color(120, 80, 50));
         FontMetrics fm = g.getFontMetrics();
         String chu = "楚河", han = "汉界";
@@ -376,7 +378,7 @@ public class ChessPanel extends JPanel {
         g.fillOval(fx - r, fy - r, r * 2, r * 2);
         
         g.setColor(c);
-        r = (int)(12);
+        r = 12;
         g.drawOval(tx - r, ty - r, r * 2, r * 2);
         g.setColor(new Color(30, 144, 255, 100));
         g.fillOval(tx - r, ty - r, r * 2, r * 2);

@@ -1,100 +1,225 @@
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.*;
-import java.awt.geom.Ellipse2D;
+import java.awt.image.BufferedImage;
 
-/**
- * 象棋棋盘绘制面板 - 修正版
- */
 public class ChessPanel extends JPanel {
-    private static final int CELL_SIZE = 60;  // 格子大小
-    private static final int PIECE_RADIUS = 26;  // 棋子半径
-    private static final int BOARD_MARGIN = 50;  // 棋盘边距
+    private static final int CELL = 65;
+    private static final int RADIUS = 28;
+    private static final int MARGIN = 55;
+    
+    private static final Color WOOD_LIGHT = new Color(240, 210, 160);
+    private static final Color WOOD_DARK = new Color(220, 185, 140);
+    private static final Color LINE_COLOR = new Color(80, 50, 30);
     
     private ChessBoard board;
-    private int selectedRow = -1;
-    private int selectedCol = -1;
+    private ChessAI ai;
     private JLabel statusLabel;
+    private SoundManager soundManager;
     private Runnable onGameOver;
+    
+    private int selRow = -1, selCol = -1;
+    private int lastFromRow = -1, lastFromCol, lastToRow, lastToCol;
+    private boolean aiThinking = false;
+    private int aiProgress = 0;
+    private Timer aiTimer;
+    private BufferedImage woodTexture;
+    
+    public enum GameMode { PVP, PVE }
+    private GameMode mode = GameMode.PVE;
+    private boolean playerIsRed = true;
     
     public ChessPanel(ChessBoard board, JLabel statusLabel) {
         this.board = board;
         this.statusLabel = statusLabel;
-        setPreferredSize(new Dimension(
-            BOARD_MARGIN * 2 + (ChessBoard.COLS - 1) * CELL_SIZE,
-            BOARD_MARGIN * 2 + (ChessBoard.ROWS - 1) * CELL_SIZE + 40
-        ));
-        setBackground(new Color(222, 184, 135));  // 棋盘木色背景
+        this.ai = new ChessAI(ChessAI.Difficulty.MEDIUM);
+        this.soundManager = new SoundManager();
+        
+        setPreferredSize(new Dimension(MARGIN * 2 + 8 * CELL, MARGIN * 2 + 9 * CELL + 50));
+        generateWoodTexture();
         
         addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
-                handleClick(e.getX(), e.getY());
+                if (!aiThinking) handleClick(e.getX(), e.getY());
             }
         });
         
+        aiTimer = new Timer(80, e -> { aiProgress = (aiProgress + 5) % 100; repaint(); });
         updateStatus();
     }
     
+    private void generateWoodTexture() {
+        int w = Math.max(1, getPreferredSize().width);
+        int h = Math.max(1, getPreferredSize().height);
+        woodTexture = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = woodTexture.createGraphics();
+        g.setPaint(new GradientPaint(0, 0, WOOD_LIGHT, w, h, WOOD_DARK));
+        g.fillRect(0, 0, w, h);
+        g.setColor(new Color(200, 170, 120, 40));
+        for (int i = 0; i < w; i += 3) {
+            g.drawLine(i, 0, i + (int)(Math.sin(i * 0.02) * 20), h);
+        }
+        g.dispose();
+    }
+    
+    public void setGameMode(GameMode m) { this.mode = m; reset(); }
+    public void setDifficulty(ChessAI.Difficulty d) { ai.setDifficulty(d); if (mode == GameMode.PVE) reset(); }
+    public void setPlayerSide(boolean red) { this.playerIsRed = red; if (mode == GameMode.PVE) reset(); }
+    public void setSoundEnabled(boolean e) { soundManager.setEnabled(e); }
+    public void setOnGameOver(Runnable r) { this.onGameOver = r; }
+    
     private void handleClick(int x, int y) {
         if (board.isGameOver()) return;
+        if (mode == GameMode.PVE && board.isRedTurn() != playerIsRed) return;
         
-        int col = Math.round((float)(x - BOARD_MARGIN) / CELL_SIZE);
-        int row = Math.round((float)(y - BOARD_MARGIN) / CELL_SIZE);
-        
-        if (row < 0 || row >= ChessBoard.ROWS || col < 0 || col >= ChessBoard.COLS) {
-            return;
-        }
+        int col = Math.round((float)(x - MARGIN) / CELL);
+        int row = Math.round((float)(y - MARGIN) / CELL);
+        if (row < 0 || row >= 10 || col < 0 || col >= 9) return;
         
         ChessPiece piece = board.getPiece(row, col);
         
-        if (selectedRow == -1) {
+        if (selRow == -1) {
             if (piece != null && piece.isRed() == board.isRedTurn()) {
-                selectedRow = row;
-                selectedCol = col;
+                selRow = row; selCol = col;
+                soundManager.playSelectSound();
                 repaint();
             }
+        } else if (row == selRow && col == selCol) {
+            selRow = selCol = -1;
+            repaint();
         } else {
-            if (row == selectedRow && col == selectedCol) {
-                selectedRow = -1;
-                selectedCol = -1;
+            boolean capture = board.getPiece(row, col) != null;
+            if (board.movePiece(selRow, selCol, row, col)) {
+                lastFromRow = selRow; lastFromCol = selCol;
+                lastToRow = row; lastToCol = col;
+                selRow = selCol = -1;
+                playSound(capture);
                 repaint();
-            } else {
-                if (board.movePiece(selectedRow, selectedCol, row, col)) {
-                    selectedRow = -1;
-                    selectedCol = -1;
-                    repaint();
-                    updateStatus();
-                    
-                    if (board.isGameOver() && onGameOver != null) {
-                        onGameOver.run();
-                    }
-                } else if (piece != null && piece.isRed() == board.isRedTurn()) {
-                    selectedRow = row;
-                    selectedCol = col;
-                    repaint();
+                updateStatus();
+                
+                if (board.isGameOver()) {
+                    soundManager.playWinSound();
+                    if (onGameOver != null) onGameOver.run();
+                } else if (mode == GameMode.PVE) {
+                    makeAIMove();
                 }
+            } else if (piece != null && piece.isRed() == board.isRedTurn()) {
+                selRow = row; selCol = col;
+                soundManager.playSelectSound();
+                repaint();
             }
         }
+    }
+    
+    /**
+     * 悔棋
+     */
+    public void undo() {
+        if (board.getHistorySize() == 0) return;
+        
+        // 如果AI正在思考，先停止
+        if (aiThinking) {
+            aiThinking = false;
+            aiTimer.stop();
+            selRow = selCol = -1;
+        }
+        
+        // 人机模式下需要撤销两步（玩家+AI）
+        if (mode == GameMode.PVE && board.getHistorySize() >= 2) {
+            board.undo(); // 撤销AI的走法
+        }
+        board.undo(); // 撤销玩家的走法
+        
+        // 清除上一步标记
+        lastFromRow = -1;
+        
+        updateStatus();
+        repaint();
+    }
+    
+    private void playSound(boolean capture) {
+        if (capture) soundManager.playCaptureSound();
+        else soundManager.playMoveSound();
+    }
+    
+    private void makeAIMove() {
+        if (board.isGameOver()) return;
+        aiThinking = true;
+        aiTimer.start();
+        updateStatus();
+        repaint();
+        
+        new SwingWorker<int[], Void>() {
+            @Override
+            protected int[] doInBackground() throws Exception {
+                Thread.sleep(switch (ai.getDifficulty()) {
+                    case EASY -> 400;
+                    case HARD -> 1200;
+                    default -> 700;
+                });
+                return ai.getNextMove(board);
+            }
+            
+            @Override
+            protected void done() {
+                try {
+                    int[] move = get();
+                    if (move != null) {
+                        selRow = move[0]; selCol = move[1];
+                        repaint();
+                        
+                        new Timer(250, e -> {
+                            boolean capture = board.getPiece(move[2], move[3]) != null;
+                            lastFromRow = move[0]; lastFromCol = move[1];
+                            lastToRow = move[2]; lastToCol = move[3];
+                            board.movePiece(move[0], move[1], move[2], move[3]);
+                            selRow = selCol = -1;
+                            aiThinking = false;
+                            aiTimer.stop();
+                            playSound(capture);
+                            updateStatus();
+                            repaint();
+                            if (board.isGameOver()) {
+                                soundManager.playWinSound();
+                                if (onGameOver != null) onGameOver.run();
+                            }
+                        }) {{ setRepeats(false); start(); }};
+                    } else {
+                        aiThinking = false;
+                        aiTimer.stop();
+                        updateStatus();
+                        repaint();
+                    }
+                } catch (Exception ex) {
+                    aiThinking = false;
+                    aiTimer.stop();
+                }
+            }
+        }.execute();
     }
     
     private void updateStatus() {
         if (board.isGameOver()) {
             statusLabel.setText(board.getWinner());
+        } else if (aiThinking) {
+            statusLabel.setText("AI 思考中...");
+        } else if (mode == GameMode.PVE) {
+            statusLabel.setText(board.isRedTurn() == playerIsRed ? "你的回合" : "AI 思考中...");
         } else {
             statusLabel.setText(board.isRedTurn() ? "红方走棋" : "黑方走棋");
         }
     }
     
-    public void setOnGameOver(Runnable onGameOver) {
-        this.onGameOver = onGameOver;
-    }
-    
     public void reset() {
-        selectedRow = -1;
-        selectedCol = -1;
+        board.reset();
+        selRow = selCol = -1;
+        lastFromRow = -1;
+        aiThinking = false;
+        aiTimer.stop();
         updateStatus();
         repaint();
+        if (mode == GameMode.PVE && !playerIsRed) SwingUtilities.invokeLater(this::makeAIMove);
     }
     
     @Override
@@ -103,243 +228,175 @@ public class ChessPanel extends JPanel {
         Graphics2D g2d = (Graphics2D) g;
         g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         
-        // 绘制棋盘背景阴影
-        drawBoardShadow(g2d);
-        
-        // 绘制棋盘线
+        if (woodTexture != null) g2d.drawImage(woodTexture, 0, 0, null);
         drawBoard(g2d);
-        
-        // 绘制炮位和兵位标记
-        drawPositionMarks(g2d);
-        
-        // 绘制棋子
         drawPieces(g2d);
+        if (selRow != -1) drawSelection(g2d, selRow, selCol);
+        if (lastFromRow != -1) drawLastMove(g2d);
+        if (aiThinking) drawAIThinking(g2d);
+    }
+    
+    private void drawBoard(Graphics2D g) {
+        int sx = MARGIN, sy = MARGIN;
+        int ex = sx + 8 * CELL, ey = sy + 9 * CELL;
         
-        // 绘制选中标记
-        if (selectedRow != -1) {
-            drawSelection(g2d, selectedRow, selectedCol);
+        g.setColor(new Color(0, 0, 0, 60));
+        g.fillRoundRect(sx - 4, sy - 4, 8 * CELL + 16, 9 * CELL + 16, 12, 12);
+        g.setColor(new Color(100, 70, 40));
+        g.setStroke(new BasicStroke(3));
+        g.drawRoundRect(sx - 8, sy - 8, 8 * CELL + 16, 9 * CELL + 16, 10, 10);
+        
+        g.setColor(LINE_COLOR);
+        g.setStroke(new BasicStroke(2.2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        for (int i = 0; i < 10; i++) g.drawLine(sx, sy + i * CELL, ex, sy + i * CELL);
+        for (int j = 0; j < 9; j++) {
+            int x = sx + j * CELL;
+            g.drawLine(x, sy, x, sy + 4 * CELL);
+            g.drawLine(x, sy + 5 * CELL, x, ey);
+        }
+        
+        int lx = sx + 3 * CELL, rx = sx + 5 * CELL;
+        g.setStroke(new BasicStroke(2));
+        g.drawLine(lx, sy, rx, sy + 2 * CELL);
+        g.drawLine(rx, sy, lx, sy + 2 * CELL);
+        g.drawLine(lx, sy + 7 * CELL, rx, ey);
+        g.drawLine(rx, sy + 7 * CELL, lx, ey);
+        
+        g.setFont(new Font("KaiTi", Font.BOLD, (int)(42)));
+        g.setColor(new Color(120, 80, 50));
+        FontMetrics fm = g.getFontMetrics();
+        String chu = "楚河", han = "汉界";
+        int cy = sy + 4 * CELL + CELL / 2 + fm.getAscent() / 3;
+        g.drawString(chu, sx + 2 * CELL - fm.stringWidth(chu) / 2, cy);
+        g.drawString(han, sx + 6 * CELL - fm.stringWidth(han) / 2, cy);
+        
+        // Position marks
+        g.setStroke(new BasicStroke(1.8f));
+        int[][] marks = {{2,1}, {2,7}, {7,1}, {7,7}, {3,0}, {3,2}, {3,4}, {3,6}, {3,8},
+                        {6,0}, {6,2}, {6,4}, {6,6}, {6,8}};
+        for (int[] m : marks) drawMark(g, m[0], m[1]);
+    }
+    
+    private void drawMark(Graphics2D g, int r, int c) {
+        int x = MARGIN + c * CELL, y = MARGIN + r * CELL;
+        int len = 10, gap = 4;
+        if (c > 0) {
+            g.drawLine(x - len - gap, y - gap, x - gap, y - gap);
+            g.drawLine(x - gap, y - len - gap, x - gap, y - gap);
+        }
+        if (c < 8) {
+            g.drawLine(x + gap, y - gap, x + len + gap, y - gap);
+            g.drawLine(x + gap, y - len - gap, x + gap, y - gap);
+        }
+        if (c > 0) {
+            g.drawLine(x - len - gap, y + gap, x - gap, y + gap);
+            g.drawLine(x - gap, y + gap, x - gap, y + len + gap);
+        }
+        if (c < 8) {
+            g.drawLine(x + gap, y + gap, x + len + gap, y + gap);
+            g.drawLine(x + gap, y + gap, x + gap, y + len + gap);
         }
     }
     
-    /**
-     * 绘制棋盘背景阴影
-     */
-    private void drawBoardShadow(Graphics2D g2d) {
-        int startX = BOARD_MARGIN - 5;
-        int startY = BOARD_MARGIN - 5;
-        int width = (ChessBoard.COLS - 1) * CELL_SIZE + 10;
-        int height = (ChessBoard.ROWS - 1) * CELL_SIZE + 10;
-        
-        g2d.setColor(new Color(180, 150, 100));
-        g2d.fillRoundRect(startX + 3, startY + 3, width, height, 10, 10);
-    }
-    
-    /**
-     * 绘制棋盘网格 - 修正版
-     */
-    private void drawBoard(Graphics2D g2d) {
-        g2d.setColor(new Color(60, 40, 20));
-        g2d.setStroke(new BasicStroke(2.5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-        
-        int startX = BOARD_MARGIN;
-        int startY = BOARD_MARGIN;
-        int endX = startX + (ChessBoard.COLS - 1) * CELL_SIZE;
-        int endY = startY + (ChessBoard.ROWS - 1) * CELL_SIZE;
-        
-        // 绘制外边框
-        g2d.drawRoundRect(startX - 2, startY - 2, endX - startX + 4, endY - startY + 4, 5, 5);
-        
-        // 绘制所有横线（全部贯通）
-        for (int i = 0; i < ChessBoard.ROWS; i++) {
-            int y = startY + i * CELL_SIZE;
-            g2d.drawLine(startX, y, endX, y);
-        }
-        
-        // 绘制竖线
-        for (int j = 0; j < ChessBoard.COLS; j++) {
-            int x = startX + j * CELL_SIZE;
-            // 上方从第0行到第4行
-            g2d.drawLine(x, startY, x, startY + 4 * CELL_SIZE);
-            // 下方从第5行到第9行
-            g2d.drawLine(x, startY + 5 * CELL_SIZE, x, endY);
-        }
-        
-        // 绘制九宫格斜线 - X型
-        // 上方九宫 (0-2行, 3-5列)
-        int topPalaceY1 = startY;
-        int topPalaceY2 = startY + 2 * CELL_SIZE;
-        int leftPalaceX = startX + 3 * CELL_SIZE;
-        int rightPalaceX = startX + 5 * CELL_SIZE;
-        
-        g2d.setStroke(new BasicStroke(2f));
-        g2d.drawLine(leftPalaceX, topPalaceY1, rightPalaceX, topPalaceY2);
-        g2d.drawLine(rightPalaceX, topPalaceY1, leftPalaceX, topPalaceY2);
-        
-        // 下方九宫 (7-9行, 3-5列)
-        int bottomPalaceY1 = startY + 7 * CELL_SIZE;
-        int bottomPalaceY2 = startY + 9 * CELL_SIZE;
-        
-        g2d.drawLine(leftPalaceX, bottomPalaceY1, rightPalaceX, bottomPalaceY2);
-        g2d.drawLine(rightPalaceX, bottomPalaceY1, leftPalaceX, bottomPalaceY2);
-        
-        // 绘制楚河汉界文字
-        g2d.setFont(new Font("SimSun", Font.BOLD, 36));
-        g2d.setColor(new Color(60, 40, 20));
-        
-        String chuHe = "楚河";
-        String hanJie = "汉界";
-        
-        // 楚河 - 右侧（黑方视角）
-        g2d.drawString(chuHe, startX + 2 * CELL_SIZE - 10, startY + 4 * CELL_SIZE + CELL_SIZE / 2 + 10);
-        // 汉界 - 左侧（黑方视角）
-        g2d.drawString(hanJie, startX + 6 * CELL_SIZE - 10, startY + 4 * CELL_SIZE + CELL_SIZE / 2 + 10);
-    }
-    
-    /**
-     * 绘制炮位和兵位标记（十字标记）
-     */
-    private void drawPositionMarks(Graphics2D g2d) {
-        g2d.setColor(new Color(60, 40, 20));
-        g2d.setStroke(new BasicStroke(1.5f));
-        
-        int markLen = 8;
-        int offset = 3;
-        
-        // 炮位标记 (2,1), (2,7), (7,1), (7,7)
-        int[][] cannonPos = {{2, 1}, {2, 7}, {7, 1}, {7, 7}};
-        for (int[] pos : cannonPos) {
-            drawMark(g2d, pos[0], pos[1], markLen, offset);
-        }
-        
-        // 兵位标记
-        int[][] pawnPos = {{3, 0}, {3, 2}, {3, 4}, {3, 6}, {3, 8},
-                          {6, 0}, {6, 2}, {6, 4}, {6, 6}, {6, 8}};
-        for (int[] pos : pawnPos) {
-            drawMark(g2d, pos[0], pos[1], markLen, offset);
-        }
-    }
-    
-    private void drawMark(Graphics2D g2d, int row, int col, int len, int offset) {
-        int x = BOARD_MARGIN + col * CELL_SIZE;
-        int y = BOARD_MARGIN + row * CELL_SIZE;
-        
-        // 左上角
-        if (col > 0) {
-            g2d.drawLine(x - len - offset, y - offset, x - offset, y - offset);
-            g2d.drawLine(x - offset, y - len - offset, x - offset, y - offset);
-        }
-        // 右上角
-        if (col < 8) {
-            g2d.drawLine(x + offset, y - offset, x + len + offset, y - offset);
-            g2d.drawLine(x + offset, y - len - offset, x + offset, y - offset);
-        }
-        // 左下角
-        if (col > 0) {
-            g2d.drawLine(x - len - offset, y + offset, x - offset, y + offset);
-            g2d.drawLine(x - offset, y + offset, x - offset, y + len + offset);
-        }
-        // 右下角
-        if (col < 8) {
-            g2d.drawLine(x + offset, y + offset, x + len + offset, y + offset);
-            g2d.drawLine(x + offset, y + offset, x + offset, y + len + offset);
-        }
-    }
-    
-    /**
-     * 绘制所有棋子
-     */
-    private void drawPieces(Graphics2D g2d) {
-        for (int row = 0; row < ChessBoard.ROWS; row++) {
-            for (int col = 0; col < ChessBoard.COLS; col++) {
-                ChessPiece piece = board.getPiece(row, col);
-                if (piece != null) {
-                    drawPiece(g2d, piece, row, col);
-                }
+    private void drawPieces(Graphics2D g) {
+        for (int r = 0; r < 10; r++) {
+            for (int c = 0; c < 9; c++) {
+                ChessPiece p = board.getPiece(r, c);
+                if (p != null) drawPiece(g, p, r, c);
             }
         }
     }
     
-    /**
-     * 绘制单个棋子 - 双层边框版
-     */
-    private void drawPiece(Graphics2D g2d, ChessPiece piece, int row, int col) {
-        int x = BOARD_MARGIN + col * CELL_SIZE;
-        int y = BOARD_MARGIN + row * CELL_SIZE;
+    private void drawPiece(Graphics2D g, ChessPiece p, int r, int c) {
+        int cx = MARGIN + c * CELL, cy = MARGIN + r * CELL;
+        boolean isRed = p.isRed();
+        Color outer = isRed ? new Color(180, 40, 40) : new Color(30, 30, 30);
+        Color inner = isRed ? new Color(220, 60, 60) : new Color(60, 60, 60);
+        Color highlight = isRed ? new Color(255, 120, 120) : new Color(120, 120, 120);
         
-        boolean isRed = piece.isRed();
-        Color innerColor = isRed ? new Color(220, 50, 50) : new Color(30, 30, 30);
-        Color outerColor = new Color(40, 40, 40);
+        for (int i = 4; i >= 1; i--) {
+            g.setColor(new Color(0, 0, 0, 25 - i * 4));
+            g.fillOval(cx - RADIUS + i, cy - RADIUS + i + 2, RADIUS * 2, RADIUS * 2);
+        }
         
-        // 棋子阴影
-        g2d.setColor(new Color(0, 0, 0, 80));
-        g2d.fillOval(x - PIECE_RADIUS + 3, y - PIECE_RADIUS + 3, 
-                     PIECE_RADIUS * 2, PIECE_RADIUS * 2);
+        g.setColor(outer);
+        g.fillOval(cx - RADIUS, cy - RADIUS, RADIUS * 2, RADIUS * 2);
         
-        // 外层黑边
-        g2d.setColor(outerColor);
-        g2d.fillOval(x - PIECE_RADIUS, y - PIECE_RADIUS, 
-                     PIECE_RADIUS * 2, PIECE_RADIUS * 2);
+        RadialGradientPaint grad = new RadialGradientPaint(cx - 5, cy - 5, RADIUS,
+            new float[]{0f, 0.7f, 1f}, new Color[]{highlight, inner, outer});
+        g.setPaint(grad);
+        g.fillOval(cx - RADIUS + 2, cy - RADIUS + 2, RADIUS * 2 - 4, RADIUS * 2 - 4);
         
-        // 棋子底色（象牙白）
-        g2d.setColor(new Color(255, 248, 230));
-        g2d.fillOval(x - PIECE_RADIUS + 2, y - PIECE_RADIUS + 2, 
-                     PIECE_RADIUS * 2 - 4, PIECE_RADIUS * 2 - 4);
+        g.setColor(new Color(255, 250, 240));
+        g.fillOval(cx - RADIUS + 6, cy - RADIUS + 6, RADIUS * 2 - 12, RADIUS * 2 - 12);
         
-        // 内层边框
-        g2d.setColor(innerColor);
-        g2d.setStroke(new BasicStroke(2.5f));
-        g2d.drawOval(x - PIECE_RADIUS + 5, y - PIECE_RADIUS + 5, 
-                     PIECE_RADIUS * 2 - 10, PIECE_RADIUS * 2 - 10);
+        g.setFont(new Font("KaiTi", Font.BOLD, 30));
+        String text = p.getName();
+        FontMetrics fm = g.getFontMetrics();
+        int tx = cx - fm.stringWidth(text) / 2, ty = cy + fm.getAscent() / 3;
+        g.setColor(new Color(0, 0, 0, 30));
+        g.drawString(text, tx + 1, ty + 1);
+        g.setColor(isRed ? new Color(200, 30, 30) : new Color(20, 20, 20));
+        g.drawString(text, tx, ty);
         
-        // 再细一点的内圈装饰
-        g2d.setStroke(new BasicStroke(1f));
-        g2d.drawOval(x - PIECE_RADIUS + 9, y - PIECE_RADIUS + 9, 
-                     PIECE_RADIUS * 2 - 18, PIECE_RADIUS * 2 - 18);
-        
-        // 绘制棋子文字
-        g2d.setFont(new Font("SimSun", Font.BOLD, 26));
-        FontMetrics fm = g2d.getFontMetrics();
-        String text = piece.getName();
-        int textWidth = fm.stringWidth(text);
-        int textHeight = fm.getAscent();
-        
-        // 文字阴影
-        g2d.setColor(new Color(0, 0, 0, 50));
-        g2d.drawString(text, x - textWidth / 2 + 1, y + textHeight / 3 + 1);
-        
-        // 文字本体
-        g2d.setColor(innerColor);
-        g2d.drawString(text, x - textWidth / 2, y + textHeight / 3);
+        g.setColor(new Color(255, 255, 255, 150));
+        g.fillOval(cx - RADIUS + 8, cy - RADIUS + 8, 8, 6);
     }
     
-    /**
-     * 绘制选中标记
-     */
-    private void drawSelection(Graphics2D g2d, int row, int col) {
-        int x = BOARD_MARGIN + col * CELL_SIZE;
-        int y = BOARD_MARGIN + row * CELL_SIZE;
-        int size = PIECE_RADIUS + 6;
+    private void drawSelection(Graphics2D g, int r, int c) {
+        int cx = MARGIN + c * CELL, cy = MARGIN + r * CELL;
+        int size = RADIUS + 8;
+        for (int i = 3; i >= 0; i--) {
+            g.setColor(new Color(50, 200, 50, 100 - i * 20));
+            g.drawOval(cx - size - i * 3, cy - size - i * 3, (size + i * 3) * 2, (size + i * 3) * 2);
+        }
+        g.setStroke(new BasicStroke(2.5f));
+        g.setColor(new Color(0, 180, 0));
+        g.drawOval(cx - size, cy - size, size * 2, size * 2);
+    }
+    
+    private void drawLastMove(Graphics2D g) {
+        int fx = MARGIN + lastFromCol * CELL, fy = MARGIN + lastFromRow * CELL;
+        int tx = MARGIN + lastToCol * CELL, ty = MARGIN + lastToRow * CELL;
+        Color c = new Color(30, 144, 255);
         
-        g2d.setColor(new Color(50, 180, 50));
-        g2d.setStroke(new BasicStroke(3f));
+        g.setColor(c);
+        g.setStroke(new BasicStroke(3, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 10, new float[]{8, 6}, 0));
+        g.drawLine(fx, fy, tx, ty);
         
-        int markLength = 12;
-        int gap = 4;
+        int r = 10;
+        g.setStroke(new BasicStroke(2.5f));
+        g.drawOval(fx - r, fy - r, r * 2, r * 2);
+        g.setColor(new Color(30, 144, 255, 60));
+        g.fillOval(fx - r, fy - r, r * 2, r * 2);
         
-        // 左上角
-        g2d.drawLine(x - size, y - size + markLength, x - size, y - size + gap);
-        g2d.drawLine(x - size + gap, y - size, x - size + markLength, y - size);
+        g.setColor(c);
+        r = (int)(12);
+        g.drawOval(tx - r, ty - r, r * 2, r * 2);
+        g.setColor(new Color(30, 144, 255, 100));
+        g.fillOval(tx - r, ty - r, r * 2, r * 2);
         
-        // 右上角
-        g2d.drawLine(x + size, y - size + markLength, x + size, y - size + gap);
-        g2d.drawLine(x + size - markLength, y - size, x + size - gap, y - size);
-        
-        // 左下角
-        g2d.drawLine(x - size, y + size - markLength, x - size, y + size - gap);
-        g2d.drawLine(x - size + gap, y + size, x - size + markLength, y + size);
-        
-        // 右下角
-        g2d.drawLine(x + size, y + size - markLength, x + size, y + size - gap);
-        g2d.drawLine(x + size - markLength, y + size, x + size - gap, y + size);
+        double angle = Math.atan2(ty - fy, tx - fx);
+        int ax = tx - (int)(Math.cos(angle) * RADIUS);
+        int ay = ty - (int)(Math.sin(angle) * RADIUS);
+        int s = 10;
+        int[] xp = {ax, ax - (int)(Math.cos(angle - Math.PI/6) * s), ax - (int)(Math.cos(angle + Math.PI/6) * s)};
+        int[] yp = {ay, ay - (int)(Math.sin(angle - Math.PI/6) * s), ay - (int)(Math.sin(angle + Math.PI/6) * s)};
+        g.fillPolygon(xp, yp, 3);
+    }
+    
+    private void drawAIThinking(Graphics2D g) {
+        int w = 160, h = 36, x = (getWidth() - w) / 2, y = 15;
+        g.setColor(new Color(40, 40, 40, 200));
+        g.fillRoundRect(x, y, w, h, 18, 18);
+        g.setColor(new Color(100, 100, 100));
+        g.drawRoundRect(x, y, w, h, 18, 18);
+        g.setColor(new Color(100, 200, 100));
+        g.fillRoundRect(x + 8, y + h - 10, (int)((w - 16) * aiProgress / 100.0), 4, 2, 2);
+        g.setColor(Color.WHITE);
+        g.setFont(new Font("SimSun", Font.BOLD, 14));
+        String t = "AI 思考中...";
+        FontMetrics fm = g.getFontMetrics();
+        g.drawString(t, x + (w - fm.stringWidth(t)) / 2, y + (h - 10) / 2 + fm.getAscent() / 2 - 2);
     }
 }

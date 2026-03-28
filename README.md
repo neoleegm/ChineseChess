@@ -36,6 +36,8 @@ A graphical Chinese Chess game developed with Java Swing, supporting both player
   - **困难**：使用 Minimax + Alpha-Beta 剪枝算法，棋力较强
 - ♟️ **自由选择**：可选择执红（先手）或执黑（后手）
 - 🎨 **精美界面**：木质棋盘、双层边框棋子、位置标记
+- 🔊 **音效提示**：选择、移动、吃子、胜利音效
+- ↩️ **悔棋功能**：支持悔棋，人机模式下悔双方各一步
 - 📖 **规则说明**：内置游戏规则帮助
 
 ### English
@@ -46,6 +48,8 @@ A graphical Chinese Chess game developed with Java Swing, supporting both player
   - **Hard**: Uses Minimax + Alpha-Beta pruning algorithm
 - ♟️ **Side Selection**: Choose to play as Red (first) or Black (second)
 - 🎨 **Beautiful UI**: Wooden board style, double-border pieces, position markers
+- 🔊 **Sound Effects**: Selection, move, capture, and win sounds
+- ↩️ **Undo**: Support undo moves, undoes both sides in PvE mode
 - 📖 **Game Rules**: Built-in rule explanation
 
 ---
@@ -58,26 +62,23 @@ A graphical Chinese Chess game developed with Java Swing, supporting both player
 
 ### 运行方法 / How to Run
 
-#### 方法一：直接运行 / Method 1: Direct Run
+#### 方法一：编译后运行 / Method 1: Compile and Run
 ```bash
-# 进入游戏目录 / Enter game directory
-cd chinese-chess
-
-# 运行游戏 / Run game
-java ChineseChessGame
-```
-
-#### 方法二：编译后运行 / Method 2: Compile and Run
-```bash
-# 进入游戏目录 / Enter game directory
-cd chinese-chess
+# 克隆仓库 / Clone repository
+git clone https://github.com/neoleegm/ChineseChess.git
+cd ChineseChess
 
 # 编译源代码 / Compile source code
-javac -encoding UTF-8 *.java
+javac -encoding UTF-8 -d bin src/*.java
 
 # 运行游戏 / Run game
-java ChineseChessGame
+java -cp bin ChineseChessGame
 ```
+
+#### 方法二：使用 VS Code / Method 2: Using VS Code
+- 使用 VS Code 打开项目文件夹
+- 安装 Java 扩展包
+- 按 F5 运行
 
 ---
 
@@ -102,6 +103,12 @@ java ChineseChessGame
 
 5. **胜负判定**
    - 吃掉对方的将/帅即可获胜
+   - 困毙对方（无合法走法）也可获胜
+
+6. **快捷键**
+   - `U` - 悔棋
+   - `R` - 重新开始
+   - `Q` - 退出游戏
 
 ### English Instructions
 
@@ -122,6 +129,12 @@ java ChineseChessGame
 
 5. **Winning Condition**
    - Capture the opponent's King (将/帅) to win
+   - Checkmate (no legal moves) also wins
+
+6. **Keyboard Shortcuts**
+   - `U` - Undo move
+   - `R` - Restart game
+   - `Q` - Quit game
 
 ---
 
@@ -145,24 +158,32 @@ java ChineseChessGame
 - **楚河汉界**：棋盘中间的界限，相/象、兵/卒不能越过
 - **九宫**：将/帅、仕/士的活动范围，位于棋盘两端（3×3区域）
 - **将帅对脸**：双方将/帅不能在同一直线上无遮挡相对
+- **将军**：将/帅被攻击时必须解将，无法解将则为将死
+- **送将**：不能主动走导致自己被将军的棋
 
 #### English
 - **River**: The middle boundary of the board. Elephants and Pawns cannot cross it
 - **Palace**: The 3×3 area at each end where King and Advisors must stay
 - **King Face-off**: The two Kings cannot face each other on the same file without any pieces between them
+- **Check**: When King is under attack, must resolve it; if cannot, it's checkmate
+- **Suicide Move**: Cannot make a move that leaves your King in check
 
 ---
 
 ## 🏗️ 项目结构 / Project Structure
 
 ```
-chinese-chess/
-├── ChineseChessGame.java    # 主程序 / Main class
-├── ChessBoard.java          # 棋盘逻辑 / Board logic
-├── ChessPanel.java          # 图形界面 / GUI panel
-├── ChessPiece.java          # 棋子类 / Piece class
-├── ChessAI.java             # AI 算法 / AI algorithm
-└── README.md                # 本文件 / This file
+ChineseChess/
+├── src/
+│   ├── ChineseChessGame.java    # 主程序 / Main class
+│   ├── ChessBoard.java          # 棋盘逻辑 / Board logic
+│   ├── ChessPanel.java          # 图形界面 / GUI panel
+│   ├── ChessPiece.java          # 棋子类 / Piece class
+│   ├── ChessAI.java             # AI 算法 / AI algorithm
+│   └── SoundManager.java        # 音效管理 / Sound manager
+├── bin/                         # 编译输出目录 (gitignore)
+├── .gitignore                   # Git 忽略配置
+└── README.md                    # 本文件 / This file
 ```
 
 ---
@@ -171,31 +192,58 @@ chinese-chess/
 
 ### 简单 / Easy
 - 随机选择合法走法
-- 有 70% 概率优先吃子
+- 80% 概率优先吃子
+- 前进走法有额外权重
 
 ### 中等 / Medium
-- 评估函数考虑：
+- 基于局面评估选择最优走法
+- 一层搜索深度
+- 评估因素：
   - 棋子基础价值
   - 兵卒位置加成
-  - 车的机动性
-  - 将帅安全度
-- 预判一层对手反击
+  - 将军奖励
+  - 被将军惩罚
 
 ### 困难 / Hard
 - **Minimax 算法**：搜索深度 3 层
-- **Alpha-Beta 剪枝**：优化搜索效率
-- 完整的局面评估函数
+- **Alpha-Beta 剪枝**：优化搜索效率，减少计算量
+- **移动排序**：优先尝试好走法，提高剪枝效率
+- **完整评估函数**：
+  - 棋子价值
+  - 位置价值（兵卒有位置表）
+  - 机动性（可移动位置数）
+  - 将军/将死检测
 
 ---
 
 ## 📝 更新日志 / Changelog
 
+### v2.0 (2025-03-28)
+- ✅ 完全重写项目，修复所有反编译错误
+- ✅ 修正棋盘布局方向（红方在下，黑方在上）
+- ✅ 完善所有棋子走法规则
+  - 正确的卒子过河逻辑
+  - 完整的将军/将死检测
+  - 送将保护（不能主动送将）
+- ✅ 增强 AI 算法
+  - 三种难度级别
+  - Minimax + Alpha-Beta 剪枝
+  - 位置价值评估
+- ✅ 优化用户界面
+  - 木质风格棋盘
+  - 最后一步高亮显示
+  - AI 思考提示
+- ✅ 添加音效系统
+  - 程序生成音效，无需外部文件
+- ✅ 完善项目结构
+  - 清理编译文件
+  - 更新 .gitignore
+
 ### v1.0
-- ✅ 完整的象棋规则实现
+- ✅ 基础象棋功能
 - ✅ 图形化界面
 - ✅ 人机对战（三档难度）
 - ✅ 人人对战
-- ✅ 棋盘美化
 
 ---
 

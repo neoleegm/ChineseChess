@@ -1,117 +1,115 @@
-/*
- * Decompiled with CFR 0.152.
- */
+import javax.sound.sampled.*;
 import java.io.ByteArrayInputStream;
-import javax.sound.sampled.AudioFormat;
-import javax.sound.sampled.AudioInputStream;
-import javax.sound.sampled.AudioSystem;
-import javax.sound.sampled.Clip;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.util.Random;
 
+/**
+ * 音效管理类
+ * 使用程序生成简单的音效，无需外部音频文件
+ */
 public class SoundManager {
-    private static final float RATE = 44100.0f;
-    private byte[] selectSound = this.generateTone(800.0, 0.08, 15.0, 0.3);
-    private byte[] moveSound = this.generateNoise(400.0, 0.12, 10.0, 0.4);
-    private byte[] captureSound = this.generateImpact(0.18, 0.5);
-    private byte[] winSound = this.generateMelody();
     private boolean enabled = true;
-
-    public void setEnabled(boolean bl) {
-        this.enabled = bl;
+    private final Random random = new Random();
+    
+    // 音频参数
+    private static final int SAMPLE_RATE = 16000;
+    private static final int SAMPLE_SIZE = 2; // 16-bit
+    
+    public void setEnabled(boolean enabled) {
+        this.enabled = enabled;
     }
-
+    
+    public boolean isEnabled() {
+        return enabled;
+    }
+    
+    /**
+     * 播放选择棋子的音效
+     */
     public void playSelectSound() {
-        this.play(this.selectSound);
+        if (!enabled) return;
+        // 清脆的短音
+        playTone(800, 60, 0.15);
     }
-
-    public void playMoveSound() {
-        this.play(this.moveSound);
-    }
-
-    public void playCaptureSound() {
-        this.play(this.captureSound);
-    }
-
-    public void playWinSound() {
-        this.play(this.winSound);
-    }
-
-    private void play(byte[] byArray) {
-        if (!this.enabled || byArray == null) {
-            return;
+    
+    /**
+     * 播放移动音效
+     */
+    public void playMoveSound(boolean captured) {
+        if (!enabled) return;
+        if (captured) {
+            // 吃子音效 - 较重
+            playTone(200, 150, 0.3);
+        } else {
+            // 普通移动 - 轻快
+            playTone(400, 80, 0.15);
         }
+    }
+    
+    /**
+     * 播放获胜音效
+     */
+    public void playWinSound() {
+        if (!enabled) return;
+        // 胜利音效序列
         new Thread(() -> {
-            try {
-                AudioFormat audioFormat = new AudioFormat(44100.0f, 16, 1, true, false);
-                AudioInputStream audioInputStream = new AudioInputStream(new ByteArrayInputStream(byArray), audioFormat, byArray.length / 2);
-                Clip clip = AudioSystem.getClip();
-                clip.open(audioInputStream);
-                clip.start();
-                Thread.sleep(clip.getMicrosecondLength() / 1000L + 50L);
-                clip.close();
-            }
-            catch (Exception exception) {
-                // empty catch block
-            }
+            playTone(523, 200, 0.2);  // C5
+            sleep(50);
+            playTone(659, 200, 0.2);  // E5
+            sleep(50);
+            playTone(784, 200, 0.2);  // G5
+            sleep(50);
+            playTone(1047, 400, 0.25); // C6
         }).start();
     }
-
-    private byte[] generateTone(double d, double d2, double d3, double d4) {
-        int n = (int)(d2 * 44100.0);
-        byte[] byArray = new byte[n * 2];
-        for (int i = 0; i < n; ++i) {
-            double d5 = (float)i / 44100.0f;
-            double d6 = Math.sin(Math.PI * 2 * d * d5) * Math.exp(-d5 * d3) * d4;
-            this.writeSample(byArray, i, d6);
-        }
-        return byArray;
-    }
-
-    private byte[] generateNoise(double d, double d2, double d3, double d4) {
-        int n = (int)(d2 * 44100.0);
-        byte[] byArray = new byte[n * 2];
-        for (int i = 0; i < n; ++i) {
-            double d5 = (float)i / 44100.0f;
-            double d6 = (Math.sin(Math.PI * 2 * d * d5) * 0.7 + (Math.random() - 0.5) * 0.3) * Math.exp(-d5 * d3) * d4;
-            this.writeSample(byArray, i, d6);
-        }
-        return byArray;
-    }
-
-    private byte[] generateImpact(double d, double d2) {
-        int n = (int)(d * 44100.0);
-        byte[] byArray = new byte[n * 2];
-        for (int i = 0; i < n; ++i) {
-            double d3 = (float)i / 44100.0f;
-            double d4 = 200.0;
-            double d5 = (Math.sin(Math.PI * 2 * d4 * d3) + Math.sin(Math.PI * 2 * d4 * 2.0 * d3) * 0.5 + Math.sin(Math.PI * 2 * d4 * 0.5 * d3) * 0.3 + (Math.random() - 0.5) * 0.5) * Math.min(1.0, d3 * 50.0) * Math.exp(-d3 * 8.0) * d2;
-            this.writeSample(byArray, i, d5);
-        }
-        return byArray;
-    }
-
-    private byte[] generateMelody() {
-        double[] dArray = new double[]{523.25, 659.25, 783.99, 1046.5};
-        double d = 0.15;
-        int n = (int)((double)dArray.length * d * 44100.0);
-        byte[] byArray = new byte[n * 2];
-        int n2 = 0;
-        double[] dArray2 = dArray;
-        int n3 = dArray.length;
-        for (int i = 0; i < n3; ++i) {
-            double d2 = dArray2[i];
-            int n4 = (int)(d * 44100.0);
-            for (int j = 0; j < n4; ++j) {
-                double d3 = (float)j / 44100.0f;
-                double d4 = (Math.sin(Math.PI * 2 * d2 * d3) + Math.sin(Math.PI * 2 * d2 * 2.0 * d3) * 0.2) * Math.min(1.0, d3 * 20.0) * Math.exp(-d3 * 5.0) * 0.3;
-                this.writeSample(byArray, n2++, d4);
+    
+    /**
+     * 生成并播放指定频率的音效
+     */
+    private void playTone(int frequency, int durationMs, double amplitude) {
+        try {
+            int numSamples = (int) ((durationMs / 1000.0) * SAMPLE_RATE);
+            byte[] audioData = new byte[numSamples * SAMPLE_SIZE];
+            
+            // 生成正弦波
+            for (int i = 0; i < numSamples; i++) {
+                double time = i / (double) SAMPLE_RATE;
+                // 添加衰减使声音更自然
+                double envelope = Math.exp(-3.0 * i / numSamples);
+                double sample = Math.sin(2 * Math.PI * frequency * time) * amplitude * envelope;
+                
+                // 转换为 16-bit PCM
+                short sampleShort = (short) (sample * 32767);
+                audioData[i * 2] = (byte) (sampleShort & 0xFF);
+                audioData[i * 2 + 1] = (byte) ((sampleShort >> 8) & 0xFF);
             }
+            
+            // 创建音频流
+            AudioFormat format = new AudioFormat(SAMPLE_RATE, 16, 1, true, false);
+            ByteArrayInputStream bais = new ByteArrayInputStream(audioData);
+            AudioInputStream ais = new AudioInputStream(bais, format, numSamples);
+            
+            // 播放
+            DataLine.Info info = new DataLine.Info(Clip.class, format);
+            Clip clip = (Clip) AudioSystem.getLine(info);
+            clip.open(ais);
+            clip.start();
+            
+            // 等待播放完成
+            Thread.sleep(durationMs + 10);
+            clip.close();
+            
+        } catch (Exception e) {
+            // 静默处理音频错误
         }
-        return byArray;
     }
-
-    private void writeSample(byte[] byArray, int n, double d) {
-        short s = (short)Math.max(-32768.0, Math.min(32767.0, d * 32767.0));
-        byArray[n * 2] = (byte)(s & 0xFF);
-        byArray[n * 2 + 1] = (byte)(s >> 8 & 0xFF);
+    
+    private void sleep(int ms) {
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 }

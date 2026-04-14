@@ -59,6 +59,14 @@ public class ChineseChessGame extends JFrame {
         String savedEnginePath = preferences.get(PREF_PIKAFISH_PATH, "");
         if (!savedEnginePath.isBlank()) {
             chessPanel.setPikafishEnginePath(savedEnginePath);
+        } else {
+            // 自动检测当前目录下的 pikafish 引擎
+            File localEngine = new File("pikafish");
+            if (localEngine.exists() && localEngine.canExecute()) {
+                String absolutePath = localEngine.getAbsolutePath();
+                chessPanel.setPikafishEnginePath(absolutePath);
+                preferences.put(PREF_PIKAFISH_PATH, absolutePath);
+            }
         }
         mainPanel.add(chessPanel, BorderLayout.CENTER);
         

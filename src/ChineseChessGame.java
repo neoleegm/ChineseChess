@@ -2,6 +2,8 @@ import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
 import java.awt.event.KeyEvent;
+import java.io.File;
+import java.util.prefs.Preferences;
 
 /**
  * 中国象棋游戏主类
@@ -9,6 +11,7 @@ import java.awt.event.KeyEvent;
  */
 public class ChineseChessGame extends JFrame {
     private static final long serialVersionUID = 1L;
+    private static final String PREF_PIKAFISH_PATH = "pikafishEnginePath";
     
     // 颜色主题
     private static final Color WOOD_DARK = new Color(139, 90, 43);
@@ -20,12 +23,15 @@ public class ChineseChessGame extends JFrame {
     private ChessBoard board;
     private ChessPanel chessPanel;
     private JLabel statusLabel;
+    private Preferences preferences;
     
     // 控制组件
     private JComboBox<String> modeCombo;
     private JComboBox<String> difficultyCombo;
     private JComboBox<String> sideCombo;
     private JCheckBox soundCheckBox;
+    private JButton engineButton;
+    private JLabel engineStatusLabel;
     
     public ChineseChessGame() {
         setTitle("中国象棋");
@@ -34,6 +40,7 @@ public class ChineseChessGame extends JFrame {
         
         // 初始化棋盘
         board = new ChessBoard();
+        preferences = Preferences.userNodeForPackage(ChineseChessGame.class);
         
         // 创建主面板
         JPanel mainPanel = new JPanel(new BorderLayout(10, 10));
@@ -49,6 +56,10 @@ public class ChineseChessGame extends JFrame {
         
         // 创建棋盘面板
         chessPanel = new ChessPanel(board, statusLabel);
+        String savedEnginePath = preferences.get(PREF_PIKAFISH_PATH, "");
+        if (!savedEnginePath.isBlank()) {
+            chessPanel.setPikafishEnginePath(savedEnginePath);
+        }
         mainPanel.add(chessPanel, BorderLayout.CENTER);
         
         // 创建侧边栏
@@ -71,7 +82,7 @@ public class ChineseChessGame extends JFrame {
             BorderFactory.createLineBorder(WOOD_DARK, 2),
             new EmptyBorder(15, 15, 15, 15)
         ));
-        panel.setPreferredSize(new Dimension(180, 0));
+        panel.setPreferredSize(new Dimension(210, 0));
         
         // 标题
         JLabel titleLabel = new JLabel("游戏设置");
@@ -110,6 +121,20 @@ public class ChineseChessGame extends JFrame {
             chessPanel.setDifficulty(diff);
         });
         panel.add(difficultyCombo);
+        panel.add(Box.createVerticalStrut(15));
+
+        // 外部引擎
+        panel.add(createLabel("困难模式引擎:"));
+        engineButton = createButton("选择 Pikafish 引擎", e -> choosePikafishEngine());
+        panel.add(engineButton);
+        panel.add(Box.createVerticalStrut(6));
+        engineStatusLabel = new JLabel();
+        engineStatusLabel.setFont(new Font("宋体", Font.PLAIN, 12));
+        engineStatusLabel.setForeground(WOOD_DARK);
+        engineStatusLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        engineStatusLabel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 44));
+        panel.add(engineStatusLabel);
+        updateEngineStatusLabel();
         panel.add(Box.createVerticalStrut(15));
         
         // 执棋方
@@ -187,6 +212,45 @@ public class ChineseChessGame extends JFrame {
         boolean isPVE = modeCombo.getSelectedIndex() == 0;
         difficultyCombo.setEnabled(isPVE);
         sideCombo.setEnabled(isPVE);
+        engineButton.setEnabled(isPVE);
+    }
+
+    private void choosePikafishEngine() {
+        JFileChooser chooser = new JFileChooser();
+        String currentPath = chessPanel.getPikafishEnginePath();
+        if (!currentPath.isBlank()) {
+            chooser.setSelectedFile(new File(currentPath));
+        }
+        chooser.setDialogTitle("选择 Pikafish 可执行文件");
+
+        int result = chooser.showOpenDialog(this);
+        if (result != JFileChooser.APPROVE_OPTION) {
+            return;
+        }
+
+        File selectedFile = chooser.getSelectedFile();
+        String path = selectedFile.getAbsolutePath();
+        preferences.put(PREF_PIKAFISH_PATH, path);
+        chessPanel.setPikafishEnginePath(path);
+        updateEngineStatusLabel();
+        JOptionPane.showMessageDialog(this,
+            "已选择 Pikafish 引擎：\n" + path + "\n\n困难难度会优先使用它，失败时自动回退内置 AI。",
+            "Pikafish 引擎",
+            JOptionPane.INFORMATION_MESSAGE);
+    }
+
+    private void updateEngineStatusLabel() {
+        if (engineStatusLabel == null) return;
+
+        String path = chessPanel.getPikafishEnginePath();
+        if (path.isBlank()) {
+            engineStatusLabel.setText("<html>未配置<br>困难模式使用内置 AI</html>");
+            engineStatusLabel.setToolTipText("未配置 Pikafish");
+        } else {
+            File file = new File(path);
+            engineStatusLabel.setText("<html>已配置<br>" + file.getName() + "</html>");
+            engineStatusLabel.setToolTipText(path);
+        }
     }
     
     private void setupKeyboardShortcuts() {
@@ -219,6 +283,7 @@ public class ChineseChessGame extends JFrame {
             【特殊规则】
             楚河汉界：相/象、兵/卒不能越过
             九宫：帅/将、仕/士不能出宫
+            将帅照面：双方将/帅不能同列无遮挡
             将军：将/帅不能被吃，被将军必须解将
             
             【胜负判定】

@@ -55,6 +55,7 @@ public class ChessPanel extends JPanel {
     private GameMode mode = GameMode.PVE;
     private boolean playerIsRed = true;  // 玩家执红
     private boolean aiThinking = false;
+    private String lastAiMessage = "";
     
     public ChessPanel(ChessBoard board, JLabel statusLabel) {
         this.board = board;
@@ -82,6 +83,19 @@ public class ChessPanel extends JPanel {
     public void setDifficulty(ChessAI.Difficulty difficulty) {
         ai.setDifficulty(difficulty);
         if (mode == GameMode.PVE) reset();
+    }
+
+    public void setPikafishEnginePath(String path) {
+        ai.setPikafishEnginePath(path);
+        updateStatus();
+    }
+
+    public String getPikafishEnginePath() {
+        return ai.getPikafishEnginePath();
+    }
+
+    public String getEngineMessage() {
+        return ai.getLastEngineMessage();
     }
     
     public void setPlayerSide(boolean isRed) {
@@ -125,7 +139,7 @@ public class ChessPanel extends JPanel {
             repaint();
         } else {
             // 尝试移动
-            if (board.canMove(selectedRow, selectedCol, row, col)) {
+            if (board.isLegalMove(selectedRow, selectedCol, row, col)) {
                 boolean captured = board.getPiece(row, col) != null;
                 if (board.movePiece(selectedRow, selectedCol, row, col)) {
                     // 记录最后一步
@@ -171,14 +185,7 @@ public class ChessPanel extends JPanel {
         SwingWorker<int[], Void> worker = new SwingWorker<>() {
             @Override
             protected int[] doInBackground() throws Exception {
-                // 根据难度调整思考时间
-                int delay = switch (ai.getDifficulty()) {
-                    case EASY -> 300;
-                    case MEDIUM -> 600;
-                    case HARD -> 1000;
-                };
-                Thread.sleep(delay);
-                return ai.getNextMove(board);
+                return ai.getNextMove(board, !playerIsRed);
             }
             
             @Override
@@ -189,13 +196,17 @@ public class ChessPanel extends JPanel {
                         ChessPiece target = board.getPiece(move[2], move[3]);
                         boolean captured = target != null;
                         
-                        // 显示AI正在选择棋子
                         selectedRow = move[0];
                         selectedCol = move[1];
                         repaint();
-                        Thread.sleep(300);
                         
-                        board.movePiece(move[0], move[1], move[2], move[3]);
+                        if (!board.movePiece(move[0], move[1], move[2], move[3])) {
+                            lastAiMessage = "AI 返回非法走法，已跳过";
+                            selectedRow = -1;
+                            selectedCol = -1;
+                            return;
+                        }
+                        lastAiMessage = ai.getLastEngineMessage();
                         
                         lastFromRow = move[0];
                         lastFromCol = move[1];
@@ -256,6 +267,7 @@ public class ChessPanel extends JPanel {
         lastToRow = -1;
         lastToCol = -1;
         aiThinking = false;
+        lastAiMessage = "";
         updateStatus();
         repaint();
         
@@ -271,10 +283,21 @@ public class ChessPanel extends JPanel {
         } else if (aiThinking) {
             statusLabel.setText("AI 思考中...");
         } else if (mode == GameMode.PVE) {
-            statusLabel.setText(board.isRedTurn() == playerIsRed ? "你的回合" : "AI 思考中...");
+            if (board.isRedTurn() == playerIsRed) {
+                statusLabel.setText(lastAiMessage.isBlank() ? "你的回合" : "你的回合 - " + summarizeEngineMessage(lastAiMessage));
+            } else {
+                statusLabel.setText("AI 思考中...");
+            }
         } else {
             statusLabel.setText(board.isRedTurn() ? "红方走棋" : "黑方走棋");
         }
+    }
+
+    private String summarizeEngineMessage(String message) {
+        if (message.length() <= 24) {
+            return message;
+        }
+        return message.substring(0, 24) + "...";
     }
     
     @Override

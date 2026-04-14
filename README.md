@@ -33,7 +33,7 @@ A graphical Chinese Chess game developed with Java Swing, supporting both player
 - 🤖 **人机对战**：与 AI 对战，三种难度可选
   - **简单**：随机走法，适合初学者
   - **中等**：基于局面评估的智能走法
-  - **困难**：使用 Minimax + Alpha-Beta 剪枝算法，棋力较强
+  - **困难**：优先支持 Pikafish 外部引擎，未配置时使用增强版内置搜索
 - ♟️ **自由选择**：可选择执红（先手）或执黑（后手）
 - 🎨 **精美界面**：木质棋盘、双层边框棋子、位置标记
 - 🔊 **音效提示**：选择、移动、吃子、胜利音效
@@ -45,7 +45,7 @@ A graphical Chinese Chess game developed with Java Swing, supporting both player
 - 🤖 **PvE Mode**: Play against AI with three difficulty levels
   - **Easy**: Random moves, suitable for beginners
   - **Medium**: Position-based evaluation for smarter moves
-  - **Hard**: Uses Minimax + Alpha-Beta pruning algorithm
+  - **Hard**: Can use the Pikafish external engine, with an enhanced built-in fallback
 - ♟️ **Side Selection**: Choose to play as Red (first) or Black (second)
 - 🎨 **Beautiful UI**: Wooden board style, double-border pieces, position markers
 - 🔊 **Sound Effects**: Selection, move, capture, and win sounds
@@ -57,7 +57,7 @@ A graphical Chinese Chess game developed with Java Swing, supporting both player
 ## 🚀 快速开始 / Quick Start
 
 ### 系统要求 / Requirements
-- Java 8 或更高版本 / Java 8 or higher
+- Java 17 或更高版本 / Java 17 or higher
 - 支持图形界面的操作系统 / OS with GUI support
 
 ### 运行方法 / How to Run
@@ -73,6 +73,9 @@ javac -encoding UTF-8 -d bin src/*.java
 
 # 运行游戏 / Run game
 java -cp bin ChineseChessGame
+
+# 运行轻量测试 / Run lightweight tests
+java -cp bin ChineseChessTests
 ```
 
 #### 方法二：使用 VS Code / Method 2: Using VS Code
@@ -91,6 +94,8 @@ java -cp bin ChineseChessGame
 
 2. **设置 AI 难度**（人机模式下）
    - 简单 / 中等 / 困难
+
+   困难模式可以在侧边栏选择本机 Pikafish 可执行文件；未配置或启动失败时会自动回退到内置 AI。
 
 3. **选择执棋方**（人机模式下）
    - 红方：先行（棋盘下方）
@@ -180,6 +185,13 @@ ChineseChess/
 │   ├── ChessPanel.java          # 图形界面 / GUI panel
 │   ├── ChessPiece.java          # 棋子类 / Piece class
 │   ├── ChessAI.java             # AI 算法 / AI algorithm
+│   ├── InternalChessEngine.java # 内置 AI 引擎 / Built-in AI engine
+│   ├── PikafishEngine.java      # Pikafish UCI 适配 / Pikafish UCI adapter
+│   ├── FenCodec.java            # FEN 编码 / FEN codec
+│   ├── Move.java                # 走法对象 / Move value object
+│   ├── MoveCodec.java           # UCI 走法编码 / UCI move codec
+│   ├── Engine.java              # 引擎接口 / Engine interface
+│   ├── ChineseChessTests.java   # 轻量测试 / Lightweight tests
 │   └── SoundManager.java        # 音效管理 / Sound manager
 ├── bin/                         # 编译输出目录 (gitignore)
 ├── .gitignore                   # Git 忽略配置
@@ -205,18 +217,29 @@ ChineseChess/
   - 被将军惩罚
 
 ### 困难 / Hard
-- **Minimax 算法**：搜索深度 3 层
-- **Alpha-Beta 剪枝**：优化搜索效率，减少计算量
-- **移动排序**：优先尝试好走法，提高剪枝效率
+- **Pikafish 外部引擎**：侧边栏选择可执行文件后，困难模式优先通过 UCI 协议请求最佳走法
+- **自动回退**：Pikafish 未配置、超时、崩溃或返回非法走法时，自动使用内置 AI
+- **内置搜索**：迭代加深 + Negamax + Alpha-Beta 剪枝 + 吃子静态延伸
 - **完整评估函数**：
-  - 棋子价值
-  - 位置价值（兵卒有位置表）
-  - 机动性（可移动位置数）
-  - 将军/将死检测
+  - 棋子价值与车/马/炮/兵位置价值
+  - 机动性、子力安全、将军/将死检测
+  - 只生成真正合法走法，避免送将和将帅照面
+
+### Pikafish 配置 / Pikafish Setup
+
+1. 从 [Pikafish Releases](https://github.com/official-pikafish/Pikafish/releases) 下载适合系统的版本。
+2. 解压后在游戏侧边栏点击“选择 Pikafish 引擎”，选择 `pikafish` 可执行文件。
+3. 选择会保存在本机 Java Preferences 中；困难模式会优先使用 Pikafish，失败时回退内置 AI。
 
 ---
 
 ## 📝 更新日志 / Changelog
+
+### v2.1
+- ✅ 补齐将帅照面规则，AI 与 UI 统一使用真正合法走法
+- ✅ 重构 AI，引入共享 Move 对象、FEN/UCI 走法编码和 Engine 接口
+- ✅ 困难模式支持 Pikafish 外部引擎，并保留增强版内置搜索回退
+- ✅ 新增轻量命令行测试覆盖规则、FEN、走法编码和 AI 可执行性
 
 ### v2.0 (2025-03-28)
 - ✅ 完全重写项目，修复所有反编译错误

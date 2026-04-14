@@ -19,7 +19,7 @@ public class ChessBoard implements Cloneable {
     private boolean redTurn;
     
     // 走棋历史（用于悔棋）
-    private List<Move> history;
+    private List<MoveRecord> history;
     
     public ChessBoard() {
         board = new ChessPiece[ROWS][COLS];
@@ -29,7 +29,7 @@ public class ChessBoard implements Cloneable {
         initBoard();
     }
     
-    private ChessBoard(ChessPiece[][] board, List<ChessPiece> pieces, boolean redTurn, List<Move> history) {
+    private ChessBoard(ChessPiece[][] board, List<ChessPiece> pieces, boolean redTurn, List<MoveRecord> history) {
         this.board = board;
         this.pieces = pieces;
         this.redTurn = redTurn;
@@ -130,6 +130,46 @@ public class ChessBoard implements Cloneable {
         }
         
         return isValidMove(piece, fromRow, fromCol, toRow, toCol);
+    }
+
+    /**
+     * 检查是否是真正合法走法：满足棋子走法，且不会让己方被将军或将帅照面。
+     */
+    public boolean isLegalMove(int fromRow, int fromCol, int toRow, int toCol) {
+        if (!canMove(fromRow, fromCol, toRow, toCol)) {
+            return false;
+        }
+
+        ChessPiece piece = board[fromRow][fromCol];
+        MoveRecord record = makeMove(new Move(fromRow, fromCol, toRow, toCol));
+        boolean legal = !isKingAttacked(piece.isRed());
+        undoMove(record);
+        return legal;
+    }
+
+    public boolean isLegalMove(Move move) {
+        return move != null && isLegalMove(move.fromRow, move.fromCol, move.toRow, move.toCol);
+    }
+
+    /**
+     * 获取某方全部合法走法。
+     */
+    public List<Move> getLegalMoves(boolean isRed) {
+        List<Move> moves = new ArrayList<>();
+
+        for (ChessPiece piece : getPieces()) {
+            if (piece.isRed() != isRed) continue;
+
+            for (int row = 0; row < ROWS; row++) {
+                for (int col = 0; col < COLS; col++) {
+                    if (isLegalMove(piece.getRow(), piece.getCol(), row, col)) {
+                        moves.add(new Move(piece.getRow(), piece.getCol(), row, col));
+                    }
+                }
+            }
+        }
+
+        return moves;
     }
     
     /**
@@ -302,37 +342,47 @@ public class ChessBoard implements Cloneable {
         if (piece == null || piece.isRed() != redTurn) {
             return false;
         }
-        if (!canMove(fromRow, fromCol, toRow, toCol)) {
+        if (!isLegalMove(fromRow, fromCol, toRow, toCol)) {
             return false;
         }
         
-        // 检查是否会导致自己被将军
-        ChessBoard testBoard = this.clone();
-        testBoard.doMove(fromRow, fromCol, toRow, toCol);
-        if (testBoard.isKingAttacked(redTurn)) {
-            return false;  // 不能送将
-        }
-        
         // 执行移动
-        ChessPiece captured = board[toRow][toCol];
-        history.add(new Move(fromRow, fromCol, toRow, toCol, captured));
-        doMove(fromRow, fromCol, toRow, toCol);
-        redTurn = !redTurn;
+        MoveRecord record = makeMove(new Move(fromRow, fromCol, toRow, toCol));
+        history.add(record);
         return true;
     }
     
     /**
-     * 仅执行移动，不检查规则（用于 AI 测试和内部操作）
+     * 仅执行移动并切换行棋方，不检查规则也不写历史（用于 AI 搜索）。
      */
-    private void doMove(int fromRow, int fromCol, int toRow, int toCol) {
-        ChessPiece piece = board[fromRow][fromCol];
-        ChessPiece captured = board[toRow][toCol];
+    public MoveRecord makeMove(Move move) {
+        ChessPiece piece = board[move.fromRow][move.fromCol];
+        ChessPiece captured = board[move.toRow][move.toCol];
         if (captured != null) {
             pieces.remove(captured);
         }
-        board[fromRow][fromCol] = null;
-        board[toRow][toCol] = piece;
-        piece.setPosition(toRow, toCol);
+        board[move.fromRow][move.fromCol] = null;
+        board[move.toRow][move.toCol] = piece;
+        piece.setPosition(move.toRow, move.toCol);
+
+        MoveRecord record = new MoveRecord(move, piece, captured, redTurn);
+        redTurn = !redTurn;
+        return record;
+    }
+
+    public void undoMove(MoveRecord record) {
+        if (record == null) return;
+
+        board[record.move.toRow][record.move.toCol] = record.captured;
+        board[record.move.fromRow][record.move.fromCol] = record.piece;
+        record.piece.setPosition(record.move.fromRow, record.move.fromCol);
+
+        if (record.captured != null) {
+            record.captured.setPosition(record.move.toRow, record.move.toCol);
+            pieces.add(record.captured);
+        }
+
+        redTurn = record.redTurnBefore;
     }
     
     /**
@@ -340,18 +390,8 @@ public class ChessBoard implements Cloneable {
      */
     public boolean undo() {
         if (history.isEmpty()) return false;
-        Move move = history.remove(history.size() - 1);
-        
-        ChessPiece piece = board[move.toRow][move.toCol];
-        board[move.toRow][move.toCol] = move.captured;
-        board[move.fromRow][move.fromCol] = piece;
-        piece.setPosition(move.fromRow, move.fromCol);
-        
-        if (move.captured != null) {
-            pieces.add(move.captured);
-        }
-        
-        redTurn = !redTurn;
+        MoveRecord move = history.remove(history.size() - 1);
+        undoMove(move);
         return true;
     }
     
@@ -377,6 +417,10 @@ public class ChessBoard implements Cloneable {
             }
         }
         if (kingRow == -1) return true;  // 将/帅不存在，视为被将死
+
+        if (areKingsFacing()) {
+            return true;
+        }
         
         // 检查对方是否有棋子可以吃掉将/帅
         for (ChessPiece piece : pieces) {
@@ -388,6 +432,44 @@ public class ChessBoard implements Cloneable {
         }
         return false;
     }
+
+    public boolean isSquareAttacked(int row, int col, boolean byRed) {
+        if (!isValidPos(row, col)) return false;
+
+        for (ChessPiece piece : pieces) {
+            if (piece.isRed() == byRed && isValidMove(piece, piece.getRow(), piece.getCol(), row, col)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean areKingsFacing() {
+        ChessPiece redKing = null;
+        ChessPiece blackKing = null;
+        for (ChessPiece piece : pieces) {
+            if (piece.getType() == ChessPiece.Type.KING) {
+                if (piece.isRed()) {
+                    redKing = piece;
+                } else {
+                    blackKing = piece;
+                }
+            }
+        }
+        if (redKing == null || blackKing == null || redKing.getCol() != blackKing.getCol()) {
+            return false;
+        }
+
+        int col = redKing.getCol();
+        int minRow = Math.min(redKing.getRow(), blackKing.getRow());
+        int maxRow = Math.max(redKing.getRow(), blackKing.getRow());
+        for (int row = minRow + 1; row < maxRow; row++) {
+            if (board[row][col] != null) {
+                return false;
+            }
+        }
+        return true;
+    }
     
     /**
      * 检查某方是否被将死
@@ -395,22 +477,7 @@ public class ChessBoard implements Cloneable {
     public boolean isCheckmate(boolean isRed) {
         if (!isKingAttacked(isRed)) return false;
         
-        // 尝试所有可能的走法，看是否能解除将军
-        for (ChessPiece piece : pieces) {
-            if (piece.isRed() != isRed) continue;
-            for (int row = 0; row < ROWS; row++) {
-                for (int col = 0; col < COLS; col++) {
-                    if (canMove(piece.getRow(), piece.getCol(), row, col)) {
-                        ChessBoard testBoard = this.clone();
-                        testBoard.doMove(piece.getRow(), piece.getCol(), row, col);
-                        if (!testBoard.isKingAttacked(isRed)) {
-                            return false;  // 有解将的走法
-                        }
-                    }
-                }
-            }
-        }
-        return true;  // 无解救法，将死
+        return getLegalMoves(isRed).isEmpty();
     }
     
     /**
@@ -424,7 +491,7 @@ public class ChessBoard implements Cloneable {
                 else blackKing = true;
             }
         }
-        return !redKing || !blackKing || isCheckmate(true) || isCheckmate(false);
+        return !redKing || !blackKing || getLegalMoves(redTurn).isEmpty();
     }
     
     /**
@@ -438,8 +505,11 @@ public class ChessBoard implements Cloneable {
                 else blackKing = true;
             }
         }
-        if (!redKing || isCheckmate(true)) return "黑方获胜！";
-        if (!blackKing || isCheckmate(false)) return "红方获胜！";
+        if (!redKing) return "黑方获胜！";
+        if (!blackKing) return "红方获胜！";
+        if (getLegalMoves(redTurn).isEmpty()) {
+            return redTurn ? "黑方获胜！" : "红方获胜！";
+        }
         return null;
     }
     
@@ -457,6 +527,31 @@ public class ChessBoard implements Cloneable {
     
     public List<ChessPiece> getPieces() {
         return new ArrayList<>(pieces);
+    }
+
+    static ChessBoard createEmptyForTesting() {
+        ChessBoard board = new ChessBoard();
+        board.clearForTesting();
+        return board;
+    }
+
+    void clearForTesting() {
+        for (int row = 0; row < ROWS; row++) {
+            for (int col = 0; col < COLS; col++) {
+                board[row][col] = null;
+            }
+        }
+        pieces.clear();
+        history.clear();
+        redTurn = true;
+    }
+
+    void addPieceForTesting(ChessPiece.Type type, boolean isRed, int row, int col) {
+        addPiece(type, isRed, row, col);
+    }
+
+    void setRedTurnForTesting(boolean redTurn) {
+        this.redTurn = redTurn;
     }
     
     @Override
@@ -476,16 +571,17 @@ public class ChessBoard implements Cloneable {
     /**
      * 走棋记录
      */
-    private static class Move {
-        final int fromRow, fromCol, toRow, toCol;
+    public static class MoveRecord {
+        final Move move;
+        final ChessPiece piece;
         final ChessPiece captured;
+        final boolean redTurnBefore;
         
-        Move(int fromRow, int fromCol, int toRow, int toCol, ChessPiece captured) {
-            this.fromRow = fromRow;
-            this.fromCol = fromCol;
-            this.toRow = toRow;
-            this.toCol = toCol;
+        MoveRecord(Move move, ChessPiece piece, ChessPiece captured, boolean redTurnBefore) {
+            this.move = move;
+            this.piece = piece;
             this.captured = captured;
+            this.redTurnBefore = redTurnBefore;
         }
     }
 }

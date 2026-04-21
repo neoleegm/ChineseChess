@@ -636,6 +636,10 @@ public class ChessBoard implements Cloneable {
         return positionCounts.getOrDefault(zobristKey, 0);
     }
     
+    public java.util.Map<Long, Integer> getPositionCounts() {
+        return new java.util.HashMap<>(positionCounts);
+    }
+    
     /**
      * 走棋记录
      */

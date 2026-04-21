@@ -256,6 +256,13 @@ public class InternalChessEngine implements Engine {
         long budgetMs = Math.max(500, timeMs);
         this.context = new SearchContext(System.nanoTime() + budgetMs * 1_000_000L);
 
+        // 将实际对局历史局面注入搜索路径，避免走回已出现过的局面
+        for (java.util.Map.Entry<Long, Integer> e : board.getPositionCounts().entrySet()) {
+            for (int i = 0; i < e.getValue(); i++) {
+                context.incrementPathCount(e.getKey());
+            }
+        }
+
         Move bestMove = legalMoves.get(0);
         int prevScore = 0;
 
@@ -292,6 +299,10 @@ public class InternalChessEngine implements Engine {
         List<Move> moves = board.getLegalMoves(aiIsRed);
         sortMoves(moves, 0, probeTTMove(board.getZobristKey()));
 
+        // 把当前根局面加入搜索路径
+        long rootKey = board.getZobristKey();
+        context.incrementPathCount(rootKey);
+
         Move bestMove = null;
         int bestScore = -INF;
 
@@ -319,6 +330,8 @@ public class InternalChessEngine implements Engine {
             }
             alpha = Math.max(alpha, score);
         }
+
+        context.decrementPathCount(rootKey);
 
         if (bestMove != null && !context.timedOut) {
             storeTT(board.getZobristKey(), depth, TT_EXACT, bestScore, bestMove);

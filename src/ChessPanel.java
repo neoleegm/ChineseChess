@@ -26,7 +26,7 @@ public class ChessPanel extends JPanel {
     private static final Color LINE_COLOR = new Color(80, 50, 20);
     private static final Color SELECT_COLOR = new Color(80, 180, 80, 180);
     private static final Color HOVER_COLOR = new Color(120, 200, 120, 120);
-    private static final Color LAST_MOVE_COLOR = new Color(255, 220, 60, 130);
+    private static final Color LAST_MOVE_COLOR = new Color(30, 60, 150, 130);
     private static final Color RED_PIECE = new Color(200, 40, 40);
     private static final Color BLACK_PIECE = new Color(30, 30, 30);
     private static final Color PIECE_BG = new Color(250, 230, 190);

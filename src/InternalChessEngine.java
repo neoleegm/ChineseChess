@@ -331,8 +331,16 @@ public class InternalChessEngine implements Engine {
 
         nodesSearched++;
 
-        // TT probe
         long key = board.getZobristKey();
+
+        // 搜索路径重复检测：避免长将/长捉
+        int pathRep = context.incrementPathCount(key);
+        if (pathRep >= 2) {
+            context.decrementPathCount(key);
+            return 0; // 和棋分数，避免循环
+        }
+
+        // TT probe
         Move ttMove = probeTTMove(key);
         TTEntry entry = probeTT(key);
         if (entry != null && entry.depth >= depth) {
@@ -410,6 +418,7 @@ public class InternalChessEngine implements Engine {
         }
 
         storeTT(key, depth, flag, bestScore, bestMove);
+        context.decrementPathCount(key);
         return bestScore;
     }
 
@@ -472,10 +481,10 @@ public class InternalChessEngine implements Engine {
         if (board.isKingAttacked(!perspectiveRed)) score += 800;
         if (board.isKingAttacked(perspectiveRed)) score -= 600;
 
-        // 重复局面惩罚：避免长将/长捉循环
+        // 实际对局历史重复惩罚
         int repCount = board.getRepetitionCount();
         if (repCount >= 2) {
-            score -= 200 * (repCount - 1);
+            score -= 800 * (repCount - 1);
         }
 
         return score;
@@ -678,10 +687,21 @@ public class InternalChessEngine implements Engine {
     private static class SearchContext {
         final long deadlineNanos;
         boolean timedOut;
+        private final java.util.HashMap<Long, Integer> pathCounts = new java.util.HashMap<>();
+
         SearchContext(long deadlineNanos) { this.deadlineNanos = deadlineNanos; }
         boolean isTimedOut() {
             if (!timedOut && System.nanoTime() >= deadlineNanos) timedOut = true;
             return timedOut;
+        }
+        int incrementPathCount(long key) {
+            return pathCounts.merge(key, 1, Integer::sum);
+        }
+        void decrementPathCount(long key) {
+            pathCounts.merge(key, -1, (oldVal, one) -> {
+                int newVal = oldVal + one;
+                return newVal <= 0 ? null : newVal;
+            });
         }
     }
 

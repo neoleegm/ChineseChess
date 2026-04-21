@@ -12,13 +12,20 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Thin UCI adapter for Pikafish.
+ * Reusable UCI adapter for Pikafish. Keeps the engine process alive across moves
+ * to avoid UCI handshake overhead on every search.
  */
 public class PikafishEngine implements Engine {
-    private static final long UCI_TIMEOUT_MS = 3000;
-    private static final long READY_TIMEOUT_MS = 3000;
+    private static final long UCI_TIMEOUT_MS = 5000;
+    private static final long READY_TIMEOUT_MS = 5000;
 
     private final String enginePath;
+    private Process process;
+    private BufferedWriter writer;
+    private BlockingQueue<String> outputQueue;
+    private ExecutorService readerExecutor;
+    private Future<?> readerTask;
+    private volatile boolean running;
 
     public PikafishEngine(String enginePath) {
         this.enginePath = enginePath;
@@ -28,107 +35,128 @@ public class PikafishEngine implements Engine {
         return enginePath;
     }
 
-    @Override
-    public Move findBestMove(ChessBoard board, boolean aiIsRed, long timeMs) throws Exception {
-        File executable = new File(enginePath);
-        if (!executable.isFile()) {
-            throw new IllegalStateException("Pikafish 引擎文件不存在");
+    private synchronized void ensureRunning() throws Exception {
+        if (running && process != null && process.isAlive()) {
+            return;
         }
-
-        ProcessBuilder processBuilder = new ProcessBuilder(executable.getAbsolutePath());
-        File parent = executable.getParentFile();
-        if (parent != null) {
-            processBuilder.directory(parent);
-        }
-        processBuilder.redirectErrorStream(true);
-
-        Process process = processBuilder.start();
-        BlockingQueue<String> output = new LinkedBlockingQueue<>();
-        ExecutorService readerExecutor = Executors.newSingleThreadExecutor();
-        Future<?> readerTask = readerExecutor.submit(() -> readOutput(process, output));
-
-        try (BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(
-                process.getOutputStream(), StandardCharsets.UTF_8))) {
-            send(writer, "uci");
-            waitFor(output, "uciok", UCI_TIMEOUT_MS);
-
-            send(writer, "isready");
-            waitFor(output, "readyok", READY_TIMEOUT_MS);
-
-            send(writer, "ucinewgame");
-            send(writer, "isready");
-            waitFor(output, "readyok", READY_TIMEOUT_MS);
-
-            send(writer, "position fen " + FenCodec.toFen(board));
-            send(writer, "go movetime " + Math.max(100, timeMs));
-
-            String bestMoveLine = waitFor(output, "bestmove", Math.max(1000, timeMs + 3000));
-            Move move = parseBestMoveLine(bestMoveLine);
-            if (move == null) {
-                throw new IllegalStateException("无法解析 Pikafish 走法: " + bestMoveLine);
-            }
-            return move;
-        } finally {
-            try {
-                sendQuietly(process, "quit");
-            } finally {
-                process.destroy();
-                if (!process.waitFor(300, TimeUnit.MILLISECONDS)) {
-                    process.destroyForcibly();
-                }
-                readerTask.cancel(true);
-                readerExecutor.shutdownNow();
-            }
-        }
+        startProcess();
     }
 
-    private static void readOutput(Process process, BlockingQueue<String> output) {
+    private void startProcess() throws Exception {
+        shutdownQuietly();
+
+        File executable = new File(enginePath);
+        if (!executable.isFile()) {
+            throw new IllegalStateException("Pikafish 引擎文件不存在: " + enginePath);
+        }
+
+        ProcessBuilder pb = new ProcessBuilder(executable.getAbsolutePath());
+        File parent = executable.getParentFile();
+        if (parent != null) pb.directory(parent);
+        pb.redirectErrorStream(true);
+
+        process = pb.start();
+        outputQueue = new LinkedBlockingQueue<>();
+        readerExecutor = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "pikafish-reader");
+            t.setDaemon(true);
+            return t;
+        });
+        readerTask = readerExecutor.submit(this::readLoop);
+        writer = new BufferedWriter(new OutputStreamWriter(process.getOutputStream(), StandardCharsets.UTF_8));
+
+        send("uci");
+        waitFor("uciok", UCI_TIMEOUT_MS);
+        send("isready");
+        waitFor("readyok", READY_TIMEOUT_MS);
+        send("setoption name Hash value 64");
+        send("ucinewgame");
+        send("isready");
+        waitFor("readyok", READY_TIMEOUT_MS);
+        running = true;
+    }
+
+    private void readLoop() {
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(
                 process.getInputStream(), StandardCharsets.UTF_8))) {
             String line;
             while ((line = reader.readLine()) != null) {
-                output.offer(line);
+                outputQueue.offer(line);
             }
         } catch (Exception ignored) {
-            // The process is often destroyed as soon as bestmove is parsed.
         }
     }
 
-    private static void send(BufferedWriter writer, String command) throws Exception {
+    @Override
+    public Move findBestMove(ChessBoard board, boolean aiIsRed, long timeMs) throws Exception {
+        ensureRunning();
+
+        send("position fen " + FenCodec.toFen(board));
+        send("go movetime " + Math.max(500, timeMs));
+
+        String bestMoveLine = waitFor("bestmove", Math.max(2000, timeMs + 4000));
+        Move move = parseBestMoveLine(bestMoveLine);
+        if (move == null) {
+            throw new IllegalStateException("无法解析 Pikafish 走法: " + bestMoveLine);
+        }
+        return move;
+    }
+
+    public void shutdown() {
+        shutdownQuietly();
+    }
+
+    private synchronized void shutdownQuietly() {
+        running = false;
+        if (writer != null) {
+            try { send("quit"); } catch (Exception ignored) {}
+        }
+        if (process != null) {
+            process.destroy();
+            try {
+                if (!process.waitFor(500, TimeUnit.MILLISECONDS)) {
+                    process.destroyForcibly();
+                }
+            } catch (InterruptedException ignored) {}
+        }
+        if (readerTask != null) {
+            readerTask.cancel(true);
+        }
+        if (readerExecutor != null) {
+            readerExecutor.shutdownNow();
+        }
+        process = null;
+        writer = null;
+    }
+
+    private void send(String command) throws Exception {
         writer.write(command);
         writer.newLine();
         writer.flush();
     }
 
-    private static void sendQuietly(Process process, String command) {
-        try {
-            BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(
-                process.getOutputStream(), StandardCharsets.UTF_8));
-            send(writer, command);
-        } catch (Exception ignored) {
+    private String waitFor(String token, long timeoutMs) throws Exception {
+        long deadline = System.nanoTime() + timeoutMs * 1_000_000L;
+        while (System.nanoTime() < deadline) {
+            long remainingMs = Math.max(1, (deadline - System.nanoTime()) / 1_000_000L);
+            String line = outputQueue.poll(Math.min(100, remainingMs), TimeUnit.MILLISECONDS);
+            if (line != null && line.startsWith(token)) {
+                return line;
+            }
+            // If process died, restart on next call
+            if (process != null && !process.isAlive()) {
+                throw new IllegalStateException("Pikafish 进程意外退出");
+            }
         }
+        throw new IllegalStateException("等待 Pikafish 响应超时: " + token);
     }
 
     static Move parseBestMoveLine(String line) {
-        if (line == null) {
-            return null;
-        }
+        if (line == null) return null;
         String[] parts = line.trim().split("\\s+");
         if (parts.length < 2 || !"bestmove".equals(parts[0]) || "(none)".equals(parts[1])) {
             return null;
         }
         return MoveCodec.fromUci(parts[1]);
-    }
-
-    private static String waitFor(BlockingQueue<String> output, String token, long timeoutMs) throws Exception {
-        long deadline = System.nanoTime() + timeoutMs * 1_000_000L;
-        while (System.nanoTime() < deadline) {
-            long remainingMs = Math.max(1, (deadline - System.nanoTime()) / 1_000_000L);
-            String line = output.poll(Math.min(100, remainingMs), TimeUnit.MILLISECONDS);
-            if (line != null && line.startsWith(token)) {
-                return line;
-            }
-        }
-        throw new IllegalStateException("等待 Pikafish 响应超时: " + token);
     }
 }

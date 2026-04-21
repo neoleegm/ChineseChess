@@ -21,6 +21,23 @@ public class ChessBoard implements Cloneable {
     // 走棋历史（用于悔棋）
     private List<MoveRecord> history;
     
+    // Zobrist 哈希（用于置换表）
+    private long zobristKey;
+    private static final long ZOBRIST_RED_TURN;
+    private static final long[][][] ZOBRIST_PIECE = new long[2][7][90];
+    
+    static {
+        java.util.Random rand = new java.util.Random(0x5DEECE66DL);
+        for (int color = 0; color < 2; color++) {
+            for (int type = 0; type < 7; type++) {
+                for (int sq = 0; sq < 90; sq++) {
+                    ZOBRIST_PIECE[color][type][sq] = rand.nextLong();
+                }
+            }
+        }
+        ZOBRIST_RED_TURN = rand.nextLong();
+    }
+    
     public ChessBoard() {
         board = new ChessPiece[ROWS][COLS];
         pieces = new ArrayList<>();
@@ -29,11 +46,12 @@ public class ChessBoard implements Cloneable {
         initBoard();
     }
     
-    private ChessBoard(ChessPiece[][] board, List<ChessPiece> pieces, boolean redTurn, List<MoveRecord> history) {
+    private ChessBoard(ChessPiece[][] board, List<ChessPiece> pieces, boolean redTurn, List<MoveRecord> history, long zobristKey) {
         this.board = board;
         this.pieces = pieces;
         this.redTurn = redTurn;
         this.history = new ArrayList<>(history);
+        this.zobristKey = zobristKey;
     }
     
     /**
@@ -92,6 +110,7 @@ public class ChessBoard implements Cloneable {
         ChessPiece piece = new ChessPiece(type, isRed, row, col);
         pieces.add(piece);
         board[row][col] = piece;
+        zobristKey ^= ZOBRIST_PIECE[isRed ? 0 : 1][type.ordinal()][row * COLS + col];
     }
     
     public ChessPiece getPiece(int row, int col) {
@@ -358,9 +377,15 @@ public class ChessBoard implements Cloneable {
     public MoveRecord makeMove(Move move) {
         ChessPiece piece = board[move.fromRow][move.fromCol];
         ChessPiece captured = board[move.toRow][move.toCol];
+        
+        zobristKey ^= ZOBRIST_PIECE[piece.isRed() ? 0 : 1][piece.getType().ordinal()][move.fromRow * COLS + move.fromCol];
         if (captured != null) {
             pieces.remove(captured);
+            zobristKey ^= ZOBRIST_PIECE[captured.isRed() ? 0 : 1][captured.getType().ordinal()][move.toRow * COLS + move.toCol];
         }
+        zobristKey ^= ZOBRIST_PIECE[piece.isRed() ? 0 : 1][piece.getType().ordinal()][move.toRow * COLS + move.toCol];
+        zobristKey ^= ZOBRIST_RED_TURN;
+        
         board[move.fromRow][move.fromCol] = null;
         board[move.toRow][move.toCol] = piece;
         piece.setPosition(move.toRow, move.toCol);
@@ -373,6 +398,13 @@ public class ChessBoard implements Cloneable {
     public void undoMove(MoveRecord record) {
         if (record == null) return;
 
+        zobristKey ^= ZOBRIST_PIECE[record.piece.isRed() ? 0 : 1][record.piece.getType().ordinal()][record.move.toRow * COLS + record.move.toCol];
+        if (record.captured != null) {
+            zobristKey ^= ZOBRIST_PIECE[record.captured.isRed() ? 0 : 1][record.captured.getType().ordinal()][record.move.toRow * COLS + record.move.toCol];
+        }
+        zobristKey ^= ZOBRIST_PIECE[record.piece.isRed() ? 0 : 1][record.piece.getType().ordinal()][record.move.fromRow * COLS + record.move.fromCol];
+        zobristKey ^= ZOBRIST_RED_TURN;
+
         board[record.move.toRow][record.move.toCol] = record.captured;
         board[record.move.fromRow][record.move.fromCol] = record.piece;
         record.piece.setPosition(record.move.fromRow, record.move.fromCol);
@@ -383,6 +415,16 @@ public class ChessBoard implements Cloneable {
         }
 
         redTurn = record.redTurnBefore;
+    }
+    
+    public void doNullMove() {
+        redTurn = !redTurn;
+        zobristKey ^= ZOBRIST_RED_TURN;
+    }
+    
+    public void undoNullMove() {
+        redTurn = !redTurn;
+        zobristKey ^= ZOBRIST_RED_TURN;
     }
     
     /**
@@ -522,6 +564,7 @@ public class ChessBoard implements Cloneable {
         pieces.clear();
         history.clear();
         redTurn = true;
+        zobristKey = 0;
         initBoard();
     }
     
@@ -544,6 +587,7 @@ public class ChessBoard implements Cloneable {
         pieces.clear();
         history.clear();
         redTurn = true;
+        zobristKey = 0;
     }
 
     void addPieceForTesting(ChessPiece.Type type, boolean isRed, int row, int col) {
@@ -565,7 +609,11 @@ public class ChessBoard implements Cloneable {
             newBoard[newPiece.getRow()][newPiece.getCol()] = newPiece;
         }
         
-        return new ChessBoard(newBoard, newPieces, redTurn, history);
+        return new ChessBoard(newBoard, newPieces, redTurn, history, zobristKey);
+    }
+    
+    public long getZobristKey() {
+        return zobristKey;
     }
     
     /**

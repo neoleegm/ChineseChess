@@ -21,7 +21,7 @@ public class ChessAI {
 
     private static final long EASY_TIME_MS = 150;
     private static final long MEDIUM_TIME_MS = 500;
-    private static final long HARD_TIME_MS = 1200;
+    private static final long HARD_TIME_MS = 8000;
     
     private Difficulty difficulty;
     private final InternalChessEngine internalEngine;

@@ -183,18 +183,63 @@ public class InternalChessEngine implements Engine {
     private Move findMediumMove(ChessBoard board, boolean aiIsRed) {
         List<Move> legalMoves = board.getLegalMoves(aiIsRed);
         if (legalMoves.isEmpty()) return null;
-        int bestScore = Integer.MIN_VALUE;
-        List<Move> bestMoves = new ArrayList<>();
-        for (Move m : legalMoves) {
-            ChessBoard.MoveRecord rec = board.makeMove(m);
-            int score = -evaluate(board, !aiIsRed);
-            if (board.isKingAttacked(!aiIsRed)) score += 350;
-            if (board.getLegalMoves(!aiIsRed).isEmpty()) score += MATE_SCORE / 4;
+
+        // Medium uses 2-ply negamax + quiescence to avoid blunders
+        Move bestMove = legalMoves.get(0);
+        int bestScore = -INF;
+
+        for (Move move : legalMoves) {
+            ChessBoard.MoveRecord rec = board.makeMove(move);
+            int score = -shallowNegamax(board, 2, -INF, -bestScore, !aiIsRed);
             board.undoMove(rec);
-            if (score > bestScore) { bestScore = score; bestMoves.clear(); bestMoves.add(m); }
-            else if (score == bestScore) bestMoves.add(m);
+
+            if (score > bestScore) {
+                bestScore = score;
+                bestMove = move;
+            }
         }
-        return bestMoves.get(random.nextInt(bestMoves.size()));
+        return bestMove;
+    }
+
+    private int shallowNegamax(ChessBoard board, int depth, int alpha, int beta, boolean sideToMove) {
+        List<Move> moves = board.getLegalMoves(sideToMove);
+        if (moves.isEmpty()) {
+            return -MATE_SCORE + 10;
+        }
+
+        if (depth <= 0) {
+            return shallowQuiescence(board, alpha, beta, sideToMove);
+        }
+
+        int bestScore = -INF;
+        for (Move move : moves) {
+            ChessBoard.MoveRecord rec = board.makeMove(move);
+            int score = -shallowNegamax(board, depth - 1, -beta, -alpha, !sideToMove);
+            board.undoMove(rec);
+
+            if (score > bestScore) bestScore = score;
+            if (score > alpha) alpha = score;
+            if (alpha >= beta) break;
+        }
+        return bestScore;
+    }
+
+    private int shallowQuiescence(ChessBoard board, int alpha, int beta, boolean sideToMove) {
+        int standPat = evaluate(board, sideToMove);
+        if (standPat >= beta) return beta;
+        if (alpha < standPat) alpha = standPat;
+
+        // Look at captures one ply deeper to avoid obvious blunders
+        for (Move move : board.getLegalMoves(sideToMove)) {
+            if (board.getPiece(move.toRow, move.toCol) != null) {
+                ChessBoard.MoveRecord rec = board.makeMove(move);
+                int score = -evaluate(board, !sideToMove);
+                board.undoMove(rec);
+                if (score >= beta) return beta;
+                if (score > alpha) alpha = score;
+            }
+        }
+        return alpha;
     }
 
     // ==================== HARD SEARCH ====================

@@ -1,4 +1,5 @@
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 
 /**
@@ -21,6 +22,9 @@ public class ChessBoard implements Cloneable {
     // 走棋历史（用于悔棋）
     private List<MoveRecord> history;
     
+    // 局面重复计数（用于避免长将/长捉）
+    private HashMap<Long, Integer> positionCounts;
+    
     // Zobrist 哈希（用于置换表）
     private long zobristKey;
     private static final long ZOBRIST_RED_TURN;
@@ -42,16 +46,20 @@ public class ChessBoard implements Cloneable {
         board = new ChessPiece[ROWS][COLS];
         pieces = new ArrayList<>();
         history = new ArrayList<>();
+        positionCounts = new HashMap<>();
         redTurn = true;
         initBoard();
+        positionCounts.put(zobristKey, 1);
     }
     
-    private ChessBoard(ChessPiece[][] board, List<ChessPiece> pieces, boolean redTurn, List<MoveRecord> history, long zobristKey) {
+    private ChessBoard(ChessPiece[][] board, List<ChessPiece> pieces, boolean redTurn,
+                       List<MoveRecord> history, long zobristKey, HashMap<Long, Integer> positionCounts) {
         this.board = board;
         this.pieces = pieces;
         this.redTurn = redTurn;
         this.history = new ArrayList<>(history);
         this.zobristKey = zobristKey;
+        this.positionCounts = new HashMap<>(positionCounts);
     }
     
     /**
@@ -368,6 +376,7 @@ public class ChessBoard implements Cloneable {
         // 执行移动
         MoveRecord record = makeMove(new Move(fromRow, fromCol, toRow, toCol));
         history.add(record);
+        positionCounts.merge(zobristKey, 1, Integer::sum);
         return true;
     }
     
@@ -433,6 +442,10 @@ public class ChessBoard implements Cloneable {
     public boolean undo() {
         if (history.isEmpty()) return false;
         MoveRecord move = history.remove(history.size() - 1);
+        positionCounts.merge(zobristKey, -1, (oldVal, one) -> {
+            int newVal = oldVal + one;
+            return newVal <= 0 ? null : newVal;
+        });
         undoMove(move);
         return true;
     }
@@ -563,9 +576,11 @@ public class ChessBoard implements Cloneable {
         }
         pieces.clear();
         history.clear();
+        positionCounts.clear();
         redTurn = true;
         zobristKey = 0;
         initBoard();
+        positionCounts.put(zobristKey, 1);
     }
     
     public List<ChessPiece> getPieces() {
@@ -586,6 +601,7 @@ public class ChessBoard implements Cloneable {
         }
         pieces.clear();
         history.clear();
+        positionCounts.clear();
         redTurn = true;
         zobristKey = 0;
     }
@@ -609,11 +625,15 @@ public class ChessBoard implements Cloneable {
             newBoard[newPiece.getRow()][newPiece.getCol()] = newPiece;
         }
         
-        return new ChessBoard(newBoard, newPieces, redTurn, history, zobristKey);
+        return new ChessBoard(newBoard, newPieces, redTurn, history, zobristKey, positionCounts);
     }
     
     public long getZobristKey() {
         return zobristKey;
+    }
+    
+    public int getRepetitionCount() {
+        return positionCounts.getOrDefault(zobristKey, 0);
     }
     
     /**

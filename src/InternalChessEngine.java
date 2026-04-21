@@ -472,6 +472,12 @@ public class InternalChessEngine implements Engine {
         if (board.isKingAttacked(!perspectiveRed)) score += 800;
         if (board.isKingAttacked(perspectiveRed)) score -= 600;
 
+        // 重复局面惩罚：避免长将/长捉循环
+        int repCount = board.getRepetitionCount();
+        if (repCount >= 2) {
+            score -= 200 * (repCount - 1);
+        }
+
         return score;
     }
 

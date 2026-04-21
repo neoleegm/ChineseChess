@@ -285,7 +285,9 @@ public class ChessPanel extends JPanel {
         if (selectedRow == -1) return;
         for (int row = 0; row < ChessBoard.ROWS; row++) {
             for (int col = 0; col < ChessBoard.COLS; col++) {
-                if (board.isLegalMove(selectedRow, selectedCol, row, col)) {
+                // canMove 轻量过滤，避免大量 isLegalMove 重型调用
+                if (board.canMove(selectedRow, selectedCol, row, col)
+                        && board.isLegalMove(selectedRow, selectedCol, row, col)) {
                     hoverMoves.add(new Move(selectedRow, selectedCol, row, col));
                 }
             }

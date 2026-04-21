@@ -223,8 +223,11 @@ public class ChessPanel extends JPanel {
                 selectedRow = row;
                 selectedCol = col;
                 soundManager.playSelectSound();
-                updateHoverMoves();
                 repaint();
+                SwingUtilities.invokeLater(() -> {
+                    updateHoverMoves();
+                    repaint();
+                });
             }
         } else if (row == selectedRow && col == selectedCol) {
             // 取消选择
@@ -268,8 +271,11 @@ public class ChessPanel extends JPanel {
                 selectedRow = row;
                 selectedCol = col;
                 soundManager.playSelectSound();
-                updateHoverMoves();
                 repaint();
+                SwingUtilities.invokeLater(() -> {
+                    updateHoverMoves();
+                    repaint();
+                });
             }
         }
     }
@@ -315,7 +321,10 @@ public class ChessPanel extends JPanel {
                             selectedCol = -1;
                             return;
                         }
-                        lastAiMessage = ai.getLastEngineMessage();
+                        ChessPiece movedPiece = board.getPiece(move[0], move[1]);
+                        ChessPiece capturedPiece = board.getPiece(move[2], move[3]);
+                        lastAiMessage = formatMoveDesc(move[0], move[1], move[2], move[3], movedPiece, capturedPiece)
+                            + " | " + ai.getLastEngineMessage();
                         
                         lastFromRow = move[0];
                         lastFromCol = move[1];
@@ -407,10 +416,22 @@ public class ChessPanel extends JPanel {
     }
 
     private String summarizeEngineMessage(String message) {
-        if (message.length() <= 24) {
+        if (message.length() <= 40) {
             return message;
         }
-        return message.substring(0, 24) + "...";
+        return message.substring(0, 40) + "...";
+    }
+    
+    private String formatMoveDesc(int fromRow, int fromCol, int toRow, int toCol,
+                                   ChessPiece piece, ChessPiece captured) {
+        if (piece == null) return "";
+        StringBuilder sb = new StringBuilder();
+        sb.append(piece.getName());
+        sb.append("[").append(fromRow).append(",").append(fromCol).append("]");
+        sb.append("→");
+        sb.append("[").append(toRow).append(",").append(toCol).append("]");
+        if (captured != null) sb.append(" 吃").append(captured.getName());
+        return sb.toString();
     }
     
     @Override

@@ -353,6 +353,15 @@ public class InternalChessEngine implements Engine {
             return 0; // 和棋分数，避免循环
         }
 
+        // 主体有多个提前返回出口，路径计数的配平由 finally 统一保证
+        try {
+            return pvsImpl(key, depth, alpha, beta, sideToMove, ply, allowNull);
+        } finally {
+            context.decrementPathCount(key);
+        }
+    }
+
+    private int pvsImpl(long key, int depth, int alpha, int beta, boolean sideToMove, int ply, boolean allowNull) {
         // TT probe
         Move ttMove = probeTTMove(key);
         TTEntry entry = probeTT(key);
@@ -431,7 +440,6 @@ public class InternalChessEngine implements Engine {
         }
 
         storeTT(key, depth, flag, bestScore, bestMove);
-        context.decrementPathCount(key);
         return bestScore;
     }
 

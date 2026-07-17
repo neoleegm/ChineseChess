@@ -635,6 +635,13 @@ public class ChessBoard implements Cloneable {
     public int getRepetitionCount() {
         return positionCounts.getOrDefault(zobristKey, 0);
     }
+
+    /**
+     * 简化规则：同一局面第三次出现（含行棋方相同）判和棋。
+     */
+    public boolean isDrawByRepetition() {
+        return getRepetitionCount() >= 3;
+    }
     
     public java.util.Map<Long, Integer> getPositionCounts() {
         return new java.util.HashMap<>(positionCounts);

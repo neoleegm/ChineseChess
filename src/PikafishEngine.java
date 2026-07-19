@@ -4,6 +4,7 @@ import java.io.File;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -91,15 +92,47 @@ public class PikafishEngine implements Engine {
     public Move findBestMove(ChessBoard board, boolean aiIsRed, long timeMs) throws Exception {
         ensureRunning();
 
-        send("position fen " + FenCodec.toFen(board));
+        // 带上完整对局历史，让引擎内部的重复局面规则（长将/长捉）生效
+        StringBuilder position = new StringBuilder("position fen ").append(FenCodec.toFen(board));
+        List<Move> historyMoves = board.getHistoryMoves();
+        if (!historyMoves.isEmpty()) {
+            position.append(" moves");
+            for (Move m : historyMoves) {
+                position.append(' ').append(MoveCodec.toUci(m));
+            }
+        }
+        send(position.toString());
         send("go movetime " + Math.max(500, timeMs));
 
-        String bestMoveLine = waitFor("bestmove", Math.max(2000, timeMs + 4000));
+        String bestMoveLine;
+        try {
+            bestMoveLine = waitFor("bestmove", Math.max(2000, timeMs + 4000));
+        } catch (Exception e) {
+            // 协议可能已错位：重置进程，避免下一次读到陈旧 bestmove
+            resetAfterFailure();
+            throw e;
+        }
         Move move = parseBestMoveLine(bestMoveLine);
         if (move == null) {
+            resetAfterFailure();
             throw new IllegalStateException("无法解析 Pikafish 走法: " + bestMoveLine);
         }
         return move;
+    }
+
+    /**
+     * bestmove 等待失败或解析失败后的恢复：停止当前搜索、清空输出队列并销毁进程，
+     * 下一次调用 ensureRunning 时重新握手，保证拿到的是当前局面的 bestmove。
+     */
+    private void resetAfterFailure() {
+        try {
+            if (writer != null) send("stop");
+        } catch (Exception ignored) {
+        }
+        if (outputQueue != null) {
+            outputQueue.clear();
+        }
+        shutdownQuietly();
     }
 
     public void shutdown() {

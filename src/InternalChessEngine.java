@@ -12,6 +12,7 @@ public class InternalChessEngine implements Engine {
     private static final int MATE_SCORE = 10_000_000;
     private static final int MAX_DEPTH = 12;
     private static final int QUIESCENCE_MAX_DEPTH = 8;
+    private static final int MEDIUM_QUIESCENCE_DEPTH = 4;
     private static final int TT_SIZE = 1 << 20;
     private static final int TT_MASK = TT_SIZE - 1;
     private static final int MAX_PLY = 64;
@@ -157,7 +158,7 @@ public class InternalChessEngine implements Engine {
         ChessBoard searchBoard = board.clone();
         return switch (difficulty) {
             case EASY -> findEasyMove(searchBoard, aiIsRed);
-            case MEDIUM -> findMediumMove(searchBoard, aiIsRed);
+            case MEDIUM -> findMediumMove(searchBoard, aiIsRed, timeMs);
             case HARD -> findHardMove(searchBoard, aiIsRed, timeMs);
         };
     }
@@ -180,17 +181,21 @@ public class InternalChessEngine implements Engine {
         return legalMoves.get(random.nextInt(legalMoves.size()));
     }
 
-    private Move findMediumMove(ChessBoard board, boolean aiIsRed) {
+    private Move findMediumMove(ChessBoard board, boolean aiIsRed, long timeMs) {
         List<Move> legalMoves = board.getLegalMoves(aiIsRed);
         if (legalMoves.isEmpty()) return null;
 
-        // Medium uses 2-ply negamax + quiescence to avoid blunders
+        // 供递归静态搜索使用的上下文（与中等档一致的思考预算）
+        this.board = board;
+        this.context = new SearchContext(System.nanoTime() + Math.max(500, timeMs) * 1_000_000L);
+
+        // Medium uses 2-ply negamax + recursive quiescence to avoid blunders
         Move bestMove = legalMoves.get(0);
         int bestScore = -INF;
 
         for (Move move : legalMoves) {
             ChessBoard.MoveRecord rec = board.makeMove(move);
-            int score = -shallowNegamax(board, 2, -INF, -bestScore, !aiIsRed);
+            int score = -shallowNegamax(board, 2, -INF, -bestScore, !aiIsRed, 1);
             board.undoMove(rec);
 
             if (score > bestScore) {
@@ -201,20 +206,20 @@ public class InternalChessEngine implements Engine {
         return bestMove;
     }
 
-    private int shallowNegamax(ChessBoard board, int depth, int alpha, int beta, boolean sideToMove) {
+    private int shallowNegamax(ChessBoard board, int depth, int alpha, int beta, boolean sideToMove, int ply) {
         List<Move> moves = board.getLegalMoves(sideToMove);
         if (moves.isEmpty()) {
-            return -MATE_SCORE + 10;
+            return -MATE_SCORE + ply;  // 与主搜索一致：越快的杀棋分数越高
         }
 
         if (depth <= 0) {
-            return shallowQuiescence(board, alpha, beta, sideToMove);
+            return quiescence(alpha, beta, sideToMove, ply, MEDIUM_QUIESCENCE_DEPTH);
         }
 
         int bestScore = -INF;
         for (Move move : moves) {
             ChessBoard.MoveRecord rec = board.makeMove(move);
-            int score = -shallowNegamax(board, depth - 1, -beta, -alpha, !sideToMove);
+            int score = -shallowNegamax(board, depth - 1, -beta, -alpha, !sideToMove, ply + 1);
             board.undoMove(rec);
 
             if (score > bestScore) bestScore = score;
@@ -222,24 +227,6 @@ public class InternalChessEngine implements Engine {
             if (alpha >= beta) break;
         }
         return bestScore;
-    }
-
-    private int shallowQuiescence(ChessBoard board, int alpha, int beta, boolean sideToMove) {
-        int standPat = evaluate(board, sideToMove);
-        if (standPat >= beta) return beta;
-        if (alpha < standPat) alpha = standPat;
-
-        // Look at captures one ply deeper to avoid obvious blunders
-        for (Move move : board.getLegalMoves(sideToMove)) {
-            if (board.getPiece(move.toRow, move.toCol) != null) {
-                ChessBoard.MoveRecord rec = board.makeMove(move);
-                int score = -evaluate(board, !sideToMove);
-                board.undoMove(rec);
-                if (score >= beta) return beta;
-                if (score > alpha) alpha = score;
-            }
-        }
-        return alpha;
     }
 
     // ==================== HARD SEARCH ====================
@@ -299,6 +286,9 @@ public class InternalChessEngine implements Engine {
         List<Move> moves = board.getLegalMoves(aiIsRed);
         sortMoves(moves, 0, probeTTMove(board.getZobristKey()));
 
+        // 记录原始窗口，用于判断根节点分数是精确值还是边界
+        int alphaOrig = alpha;
+
         // 把当前根局面加入搜索路径
         long rootKey = board.getZobristKey();
         context.incrementPathCount(rootKey);
@@ -334,7 +324,9 @@ public class InternalChessEngine implements Engine {
         context.decrementPathCount(rootKey);
 
         if (bestMove != null && !context.timedOut) {
-            storeTT(board.getZobristKey(), depth, TT_EXACT, bestScore, bestMove);
+            //  aspiration 窗口失败时分数只是边界，不能标 EXACT
+            byte flag = bestScore <= alphaOrig ? TT_UPPER : (bestScore >= beta ? TT_LOWER : TT_EXACT);
+            storeTT(board.getZobristKey(), depth, flag, bestScore, bestMove, 0);
         }
         return new SearchResult(bestMove, bestScore);
     }
@@ -364,7 +356,7 @@ public class InternalChessEngine implements Engine {
     private int pvsImpl(long key, int depth, int alpha, int beta, boolean sideToMove, int ply, boolean allowNull) {
         // TT probe
         Move ttMove = probeTTMove(key);
-        TTEntry entry = probeTT(key);
+        TTEntry entry = probeTT(key, ply);
         if (entry != null && entry.depth >= depth) {
             if (entry.flag == TT_EXACT) return entry.score;
             if (entry.flag == TT_LOWER && entry.score >= beta) return entry.score;
@@ -433,13 +425,13 @@ public class InternalChessEngine implements Engine {
                         updateKillers(move, ply);
                         historyTable[move.fromRow * 9 + move.fromCol][move.toRow * 9 + move.toCol] += depth * depth;
                     }
-                    storeTT(key, depth, flag, beta, bestMove);
+                    storeTT(key, depth, flag, beta, bestMove, ply);
                     return beta;
                 }
             }
         }
 
-        storeTT(key, depth, flag, bestScore, bestMove);
+        storeTT(key, depth, flag, bestScore, bestMove, ply);
         return bestScore;
     }
 
@@ -500,13 +492,7 @@ public class InternalChessEngine implements Engine {
         score -= evaluateStructure(board, !perspectiveRed);
 
         if (board.isKingAttacked(!perspectiveRed)) score += 800;
-        if (board.isKingAttacked(perspectiveRed)) score -= 600;
-
-        // 实际对局历史重复惩罚
-        int repCount = board.getRepetitionCount();
-        if (repCount >= 2) {
-            score -= 800 * (repCount - 1);
-        }
+        if (board.isKingAttacked(perspectiveRed)) score -= 800;
 
         return score;
     }
@@ -635,7 +621,11 @@ public class InternalChessEngine implements Engine {
 
     // ==================== TRANSPOSITION TABLE ====================
 
-    private void storeTT(long key, int depth, byte flag, int score, Move move) {
+    private void storeTT(long key, int depth, byte flag, int score, Move move, int ply) {
+        // 杀棋分数归一化为与 ply 无关的形式，读取时再按当前 ply 还原
+        if (score > MATE_SCORE - MAX_PLY) score += ply;
+        else if (score < -(MATE_SCORE - MAX_PLY)) score -= ply;
+
         int idx = (int) (key & TT_MASK);
         // Always replace if deeper or same depth
         if (ttDepths[idx] <= depth) {
@@ -647,10 +637,14 @@ public class InternalChessEngine implements Engine {
         }
     }
 
-    private TTEntry probeTT(long key) {
+    private TTEntry probeTT(long key, int ply) {
         int idx = (int) (key & TT_MASK);
         if (ttKeys[idx] == key) {
-            return new TTEntry(ttDepths[idx], ttFlags[idx], ttScores[idx], decodeMove(ttMoves[idx]));
+            int score = ttScores[idx];
+            // 杀棋分数按当前 ply 还原
+            if (score > MATE_SCORE - MAX_PLY) score -= ply;
+            else if (score < -(MATE_SCORE - MAX_PLY)) score += ply;
+            return new TTEntry(ttDepths[idx], ttFlags[idx], score, decodeMove(ttMoves[idx]));
         }
         return null;
     }

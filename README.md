@@ -35,9 +35,13 @@ A graphical Chinese Chess game developed with Java Swing, supporting both player
   - **中等**：基于局面评估的智能走法
   - **困难**：优先支持 Pikafish 外部引擎，未配置时使用增强版内置搜索
 - ♟️ **自由选择**：可选择执红（先手）或执黑（后手）
-- 🎨 **精美界面**：木质棋盘、双层边框棋子、位置标记
-- 🔊 **音效提示**：选择、移动、吃子、胜利音效
+- 🎨 **精美界面**：木质棋盘、双层边框棋子、位置标记、走子滑动动画
+- 🔊 **音效提示**：选择、移动、吃子、将军、胜利音效
 - ↩️ **悔棋功能**：支持悔棋，人机模式下悔双方各一步
+- 📜 **着法历史**：侧边栏中文记谱（如 炮二平五、马8进7）
+- 💀 **被吃子展示**：实时显示双方被吃棋子
+- ⚖️ **完整胜负判定**：将死、困毙判负，三次重复局面判和，长将作负
+- 💾 **设置记忆**：模式、难度、执棋方、音效设置自动保存
 - 📖 **规则说明**：内置游戏规则帮助
 
 ### English
@@ -47,9 +51,13 @@ A graphical Chinese Chess game developed with Java Swing, supporting both player
   - **Medium**: Position-based evaluation for smarter moves
   - **Hard**: Can use the Pikafish external engine, with an enhanced built-in fallback
 - ♟️ **Side Selection**: Choose to play as Red (first) or Black (second)
-- 🎨 **Beautiful UI**: Wooden board style, double-border pieces, position markers
-- 🔊 **Sound Effects**: Selection, move, capture, and win sounds
+- 🎨 **Beautiful UI**: Wooden board style, double-border pieces, position markers, smooth move animation
+- 🔊 **Sound Effects**: Selection, move, capture, check, and win sounds
 - ↩️ **Undo**: Support undo moves, undoes both sides in PvE mode
+- 📜 **Move History**: Chinese notation list in the sidebar (e.g. 炮二平五)
+- 💀 **Captured Pieces**: Real-time display of captured pieces for both sides
+- ⚖️ **Full Adjudication**: Checkmate and stalemate losses, threefold-repetition draw, perpetual check loss
+- 💾 **Persistent Settings**: Mode, difficulty, side, and sound settings are saved
 - 📖 **Game Rules**: Built-in rule explanation
 
 ---
@@ -107,8 +115,9 @@ java -cp bin ChineseChessTests
    - 再次点击已选中的棋子可取消选择
 
 5. **胜负判定**
-   - 吃掉对方的将/帅即可获胜
-   - 困毙对方（无合法走法）也可获胜
+   - 将死对方或使对方无棋可走（困毙）即可获胜
+   - 同一局面第三次出现：若一方步步将军则判长将作负，否则判和棋
+   - 终局后可选择"再来一局"
 
 6. **快捷键**
    - `U` - 悔棋
@@ -133,8 +142,9 @@ java -cp bin ChineseChessTests
    - Click the selected piece again to cancel selection
 
 5. **Winning Condition**
-   - Capture the opponent's King (将/帅) to win
-   - Checkmate (no legal moves) also wins
+   - Checkmate the opponent, or leave them with no legal moves (stalemate counts as a loss)
+   - On the third occurrence of the same position: perpetual check loses; otherwise it's a draw
+   - Choose "Play again" on the game-over dialog to start a new game
 
 6. **Keyboard Shortcuts**
    - `U` - Undo move
@@ -190,6 +200,7 @@ ChineseChess/
 │   ├── FenCodec.java            # FEN 编码 / FEN codec
 │   ├── Move.java                # 走法对象 / Move value object
 │   ├── MoveCodec.java           # UCI 走法编码 / UCI move codec
+│   ├── MoveNotation.java        # 中文记谱生成 / Chinese move notation
 │   ├── Engine.java              # 引擎接口 / Engine interface
 │   ├── ChineseChessTests.java   # 轻量测试 / Lightweight tests
 │   └── SoundManager.java        # 音效管理 / Sound manager
@@ -209,7 +220,7 @@ ChineseChess/
 
 ### 中等 / Medium
 - 基于局面评估选择最优走法
-- 一层搜索深度
+- 两层搜索 + 递归吃子静态搜索
 - 评估因素：
   - 棋子基础价值
   - 兵卒位置加成
@@ -234,6 +245,16 @@ ChineseChess/
 ---
 
 ## 📝 更新日志 / Changelog
+
+### v3.0
+- ✅ 规则完善：三次重复局面判和、长将作负，终局区分将死/困毙/和棋文案
+- ✅ 修复竞态：重置/切换模式不再与 AI 后台计算冲突，AI 全程在克隆棋盘上计算
+- ✅ 修复执黑悔棋锁死、AI 走法描述丢失、Pikafish 超时后协议错位等问题
+- ✅ Pikafish 同步完整对局历史，引擎进程生命周期妥善管理
+- ✅ 引擎修正：置换表杀棋分数归一化、中等难度递归静态搜索
+- ✅ 走子滑动动画、中文记谱着法列表、被吃子展示、将军音效与提示
+- ✅ 终局"再来一局"对话框、对局中重置确认、设置持久化
+- ✅ 扩充轻量测试至 17 组：全部棋子规则、送将保护、将死/困毙、悔棋一致性、重复裁决、中文记谱、AI 战术
 
 ### v2.1
 - ✅ 补齐将帅照面规则，AI 与 UI 统一使用真正合法走法
@@ -280,7 +301,7 @@ This is an open-source learning project. Feel free to use and modify.
 
 ## 🙏 致谢 / Acknowledgments
 
-- 棋子字体：宋体 / Font: SimSun
+- 棋子字体：系统默认中文字体 / Font: System default CJK font
 - 开发语言：Java / Language: Java
 - GUI 框架：Swing / GUI Framework: Swing
 

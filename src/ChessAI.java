@@ -7,13 +7,13 @@ public class ChessAI {
         EASY("简单"),
         MEDIUM("中等"),
         HARD("困难");
-        
+
         private final String displayName;
-        
+
         Difficulty(String displayName) {
             this.displayName = displayName;
         }
-        
+
         public String getDisplayName() {
             return displayName;
         }
@@ -22,29 +22,33 @@ public class ChessAI {
     private static final long EASY_TIME_MS = 150;
     private static final long MEDIUM_TIME_MS = 2500;
     private static final long HARD_TIME_MS = 8000;
-    
+
     private Difficulty difficulty;
     private final InternalChessEngine internalEngine;
     private PikafishEngine pikafishEngine;
     private String lastEngineMessage = "内置 AI";
-    
+
     public ChessAI(Difficulty difficulty) {
         this.difficulty = difficulty;
         this.internalEngine = new InternalChessEngine(difficulty);
     }
-    
+
     public void setDifficulty(Difficulty difficulty) {
         this.difficulty = difficulty;
         internalEngine.setDifficulty(difficulty);
     }
-    
+
     public Difficulty getDifficulty() {
         return difficulty;
     }
 
     public void setPikafishEnginePath(String enginePath) {
-        if (enginePath == null || enginePath.isBlank()) {
+        // 替换前先销毁旧引擎进程，避免子进程泄漏
+        if (pikafishEngine != null) {
+            pikafishEngine.shutdown();
             pikafishEngine = null;
+        }
+        if (enginePath == null || enginePath.isBlank()) {
             lastEngineMessage = "未配置 Pikafish，使用内置 AI";
         } else {
             pikafishEngine = new PikafishEngine(enginePath);
@@ -63,7 +67,16 @@ public class ChessAI {
     public String getLastEngineMessage() {
         return lastEngineMessage;
     }
-    
+
+    /**
+     * 销毁外部引擎进程（游戏退出时调用）。
+     */
+    public void shutdown() {
+        if (pikafishEngine != null) {
+            pikafishEngine.shutdown();
+        }
+    }
+
     /**
      * 获取 AI 的下一步走法。兼容旧调用：默认 AI 执黑。
      * @return int[]{fromRow, fromCol, toRow, toCol} 或 null
@@ -79,11 +92,13 @@ public class ChessAI {
 
     public Move findBestMove(ChessBoard board, boolean aiIsRed) {
         long timeMs = getThinkTimeMs();
+        // 在克隆棋盘上校验与计算，避免 AI 后台线程与界面线程并发读写对局棋盘
+        ChessBoard work = board.clone();
 
         if (difficulty == Difficulty.HARD && pikafishEngine != null) {
             try {
-                Move move = pikafishEngine.findBestMove(board, aiIsRed, timeMs);
-                if (isMoveForSide(board, move, aiIsRed) && board.isLegalMove(move)) {
+                Move move = pikafishEngine.findBestMove(work, aiIsRed, timeMs);
+                if (isMoveForSide(work, move, aiIsRed) && work.isLegalMove(move)) {
                     lastEngineMessage = "Pikafish";
                     return move;
                 }
@@ -96,8 +111,8 @@ public class ChessAI {
         }
 
         try {
-            Move move = internalEngine.findBestMove(board, aiIsRed, timeMs);
-            if (move != null && isMoveForSide(board, move, aiIsRed) && board.isLegalMove(move)) {
+            Move move = internalEngine.findBestMove(work, aiIsRed, timeMs);
+            if (move != null && isMoveForSide(work, move, aiIsRed) && work.isLegalMove(move)) {
                 return move;
             }
         } catch (Exception e) {

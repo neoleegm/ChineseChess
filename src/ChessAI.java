@@ -95,14 +95,16 @@ public class ChessAI {
         // 在克隆棋盘上校验与计算，避免 AI 后台线程与界面线程并发读写对局棋盘
         ChessBoard work = board.clone();
 
+        Move move = null;
         if (difficulty == Difficulty.HARD && pikafishEngine != null) {
             try {
-                Move move = pikafishEngine.findBestMove(work, aiIsRed, timeMs);
-                if (isMoveForSide(work, move, aiIsRed) && work.isLegalMove(move)) {
+                Move candidate = pikafishEngine.findBestMove(work, aiIsRed, timeMs);
+                if (isMoveForSide(work, candidate, aiIsRed) && work.isLegalMove(candidate)) {
                     lastEngineMessage = "Pikafish";
-                    return move;
+                    move = candidate;
+                } else {
+                    lastEngineMessage = "Pikafish 返回非法走法，已回退内置 AI";
                 }
-                lastEngineMessage = "Pikafish 返回非法走法，已回退内置 AI";
             } catch (Exception e) {
                 lastEngineMessage = "Pikafish 不可用，已回退内置 AI: " + e.getMessage();
             }
@@ -110,15 +112,47 @@ public class ChessAI {
             lastEngineMessage = "内置 AI";
         }
 
-        try {
-            Move move = internalEngine.findBestMove(work, aiIsRed, timeMs);
-            if (move != null && isMoveForSide(work, move, aiIsRed) && work.isLegalMove(move)) {
-                return move;
+        if (move == null) {
+            try {
+                Move candidate = internalEngine.findBestMove(work, aiIsRed, timeMs);
+                if (candidate != null && isMoveForSide(work, candidate, aiIsRed) && work.isLegalMove(candidate)) {
+                    move = candidate;
+                }
+            } catch (Exception e) {
+                lastEngineMessage = "内置 AI 计算失败: " + e.getMessage();
             }
-        } catch (Exception e) {
-            lastEngineMessage = "内置 AI 计算失败: " + e.getMessage();
         }
-        return null;
+
+        // 兜底：不允许主动走出长将（长将作负），否则换不判负的合法着
+        if (move != null && causesSelfPerpetualLoss(work, move, aiIsRed)) {
+            move = pickMoveAvoidingPerpetualLoss(work, aiIsRed, move);
+        }
+        return move;
+    }
+
+    /**
+     * 试走该着是否立即导致己方长将作负（同一局面第三次出现且己方步步将军）。
+     */
+    private boolean causesSelfPerpetualLoss(ChessBoard work, Move move, boolean aiIsRed) {
+        if (!work.movePiece(move.fromRow, move.fromCol, move.toRow, move.toCol)) {
+            return false; // 非法走法由上层校验处理
+        }
+        ChessBoard.RepetitionOutcome outcome = work.getRepetitionOutcome();
+        work.undo();
+        return aiIsRed ? outcome == ChessBoard.RepetitionOutcome.RED_LOSES
+                       : outcome == ChessBoard.RepetitionOutcome.BLACK_LOSES;
+    }
+
+    /**
+     * 原着法会立即长将判负时，改选不判负的合法着；全都判负（理论极端）则维持原着。
+     */
+    private Move pickMoveAvoidingPerpetualLoss(ChessBoard work, boolean aiIsRed, Move fallback) {
+        for (Move m : work.getLegalMoves(aiIsRed)) {
+            if (!causesSelfPerpetualLoss(work, m, aiIsRed)) {
+                return m;
+            }
+        }
+        return fallback;
     }
 
     private long getThinkTimeMs() {

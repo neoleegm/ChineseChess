@@ -145,6 +145,11 @@ public class InternalChessEngine implements Engine {
     private long nodesSearched;
     private SearchContext context;
 
+    // 显式搜索路径（对局历史 + 搜索树），用于长将感知的重复评分
+    private long[] pathKeys = new long[256];
+    private boolean[] pathCheck = new boolean[256];
+    private int pathLen;
+
     public InternalChessEngine(ChessAI.Difficulty difficulty) {
         this.difficulty = difficulty;
     }
@@ -243,12 +248,14 @@ public class InternalChessEngine implements Engine {
         long budgetMs = Math.max(500, timeMs);
         this.context = new SearchContext(System.nanoTime() + budgetMs * 1_000_000L);
 
-        // 将实际对局历史局面注入搜索路径，避免走回已出现过的局面
+        // 将实际对局历史局面注入搜索路径计数，作为重复检测的快速预筛
         for (java.util.Map.Entry<Long, Integer> e : board.getPositionCounts().entrySet()) {
             for (int i = 0; i < e.getValue(); i++) {
                 context.incrementPathCount(e.getKey());
             }
         }
+        // 重建显式历史路径（含每步是否将军），供长将感知的重复评分
+        seedPathFromHistory(board);
 
         Move bestMove = legalMoves.get(0);
         int prevScore = 0;
@@ -280,6 +287,68 @@ public class InternalChessEngine implements Engine {
         }
 
         return bestMove;
+    }
+
+    /**
+     * 把对局历史重建为显式搜索路径（各局面键 + 进入该局面那步是否将军），
+     * 供长将感知的重复评分使用。
+     */
+    private void seedPathFromHistory(ChessBoard board) {
+        List<ChessBoard.MoveRecord> records = board.getHistoryRecords();
+        ChessBoard walk = board.clone();
+        List<Long> keys = new ArrayList<>();
+        keys.add(walk.getZobristKey());
+        for (int i = records.size() - 1; i >= 0; i--) {
+            walk.undo();
+            keys.add(walk.getZobristKey());
+        }
+        // keys 当前为 [当前局面, 上一局面, ..., 初始局面]，按时间顺序倒序写入路径
+        int needed = keys.size() + MAX_PLY + 16;
+        if (pathKeys.length < needed) {
+            pathKeys = new long[needed];
+            pathCheck = new boolean[needed];
+        }
+        for (int t = 0; t < keys.size(); t++) {
+            pathKeys[t] = keys.get(keys.size() - 1 - t);
+            pathCheck[t] = t != 0 && records.get(t - 1).givesCheck;
+        }
+        pathLen = keys.size();
+    }
+
+    /**
+     * 重复局面评分（长将感知）：找到路径中最近一次相同局面，
+     * 统计循环区间内双方的将军标记；单方步步将军判负，否则和棋。
+     */
+    private int repetitionScore(long key, boolean inCheckNow, boolean sideToMove, int ply) {
+        int last = -1;
+        for (int i = pathLen - 1; i >= 0; i--) {
+            if (pathKeys[i] == key) {
+                last = i;
+                break;
+            }
+        }
+        if (last < 0) {
+            return 0; // 计数与路径不同步，理论不应发生；保守和棋
+        }
+
+        boolean selfAllCheck = true, oppAllCheck = true;
+        int selfMoves = 0, oppMoves = 0;
+        for (int k = last + 1; k <= pathLen; k++) {
+            // 进入第 k 层的着法是否为将军（当前层用刚算出的 inCheck）
+            boolean gaveCheck = k == pathLen ? inCheckNow : pathCheck[k];
+            // 与 last 同侧的为当前行棋方（键含行棋方，距离必为偶数）
+            boolean bySelf = ((k - last) & 1) == 1;
+            if (bySelf) {
+                selfMoves++;
+                if (!gaveCheck) selfAllCheck = false;
+            } else {
+                oppMoves++;
+                if (!gaveCheck) oppAllCheck = false;
+            }
+        }
+        if (selfAllCheck && selfMoves > 0 && !oppAllCheck) return -MATE_SCORE + ply; // 当前方长将作负
+        if (oppAllCheck && oppMoves > 0 && !selfAllCheck) return MATE_SCORE - ply;   // 对方长将作负
+        return 0;
     }
 
     private SearchResult searchRoot(int depth, int alpha, int beta) {
@@ -337,23 +406,28 @@ public class InternalChessEngine implements Engine {
         nodesSearched++;
 
         long key = board.getZobristKey();
+        boolean inCheck = board.isKingAttacked(sideToMove);
 
-        // 搜索路径重复检测：避免长将/长捉
-        int pathRep = context.incrementPathCount(key);
-        if (pathRep >= 2) {
-            context.decrementPathCount(key);
-            return 0; // 和棋分数，避免循环
+        // 与对局历史或搜索路径重复：按长将规则评分（单方步步将军判负，否则和棋）
+        if (context.getPathCount(key) >= 1) {
+            return repetitionScore(key, inCheck, sideToMove, ply);
         }
 
-        // 主体有多个提前返回出口，路径计数的配平由 finally 统一保证
+        context.incrementPathCount(key);
+        pathKeys[pathLen] = key;
+        pathCheck[pathLen] = inCheck;
+        pathLen++;
+
+        // 主体有多个提前返回出口，路径计数与路径数组的配平由 finally 统一保证
         try {
-            return pvsImpl(key, depth, alpha, beta, sideToMove, ply, allowNull);
+            return pvsImpl(key, inCheck, depth, alpha, beta, sideToMove, ply, allowNull);
         } finally {
+            pathLen--;
             context.decrementPathCount(key);
         }
     }
 
-    private int pvsImpl(long key, int depth, int alpha, int beta, boolean sideToMove, int ply, boolean allowNull) {
+    private int pvsImpl(long key, boolean inCheck, int depth, int alpha, int beta, boolean sideToMove, int ply, boolean allowNull) {
         // TT probe
         Move ttMove = probeTTMove(key);
         TTEntry entry = probeTT(key, ply);
@@ -368,7 +442,6 @@ public class InternalChessEngine implements Engine {
             return -MATE_SCORE + ply;
         }
 
-        boolean inCheck = board.isKingAttacked(sideToMove);
         if (inCheck) depth++;
 
         if (depth <= 0) {
@@ -711,6 +784,9 @@ public class InternalChessEngine implements Engine {
         }
         int incrementPathCount(long key) {
             return pathCounts.merge(key, 1, Integer::sum);
+        }
+        int getPathCount(long key) {
+            return pathCounts.getOrDefault(key, 0);
         }
         void decrementPathCount(long key) {
             pathCounts.merge(key, -1, (oldVal, one) -> {

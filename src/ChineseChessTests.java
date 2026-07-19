@@ -20,6 +20,7 @@ public class ChineseChessTests {
         testAiTakesHangingRook();
         testAiFindsMateInOne();
         testMoveNotation();
+        testAiAvoidsPerpetualCheck();
         System.out.println("All ChineseChess tests passed.");
     }
 
@@ -383,6 +384,30 @@ public class ChineseChessTests {
         k.addPieceForTesting(ChessPiece.Type.KING, false, 0, 0);
         assertEquals("帅五平四", MoveNotation.toChineseNotation(k, new Move(9, 4, 9, 5)), "帅五平四");
         assertEquals("帅五进一", MoveNotation.toChineseNotation(k, new Move(9, 4, 8, 4)), "帅五进一");
+    }
+
+    /**
+     * 长将作负适配：两轮长将循环后，AI 不得再走立即判负的将军着
+     */
+    private static void testAiAvoidsPerpetualCheck() {
+        int[][] seq = {
+            {5, 3, 5, 4}, {0, 4, 0, 3}, {5, 4, 5, 3}, {0, 3, 0, 4},
+            {5, 3, 5, 4}, {0, 4, 0, 3}, {5, 4, 5, 3}, {0, 3, 0, 4},
+        };
+        for (ChessAI.Difficulty d : ChessAI.Difficulty.values()) {
+            ChessBoard b = ChessBoard.createEmptyForTesting();
+            b.addPieceForTesting(ChessPiece.Type.KING, true, 9, 5);
+            b.addPieceForTesting(ChessPiece.Type.KING, false, 0, 4);
+            b.addPieceForTesting(ChessPiece.Type.ROOK, true, 5, 3);
+            for (int[] m : seq) {
+                assertTrue(b.movePiece(m[0], m[1], m[2], m[3]), "cycle move should execute");
+            }
+            // 红方此时走 (5,3)->(5,4) 将军即第三次长将，立即判负
+            Move move = new ChessAI(d).findBestMove(b, true);
+            assertTrue(move != null, d + " should return a move");
+            assertTrue(!(move.fromRow == 5 && move.fromCol == 3 && move.toRow == 5 && move.toCol == 4),
+                d + " must avoid the immediate perpetual-check loss, chose " + move);
+        }
     }
 
     private static void assertTrue(boolean condition, String message) {

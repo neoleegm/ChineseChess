@@ -535,6 +535,13 @@ public class ChessBoard implements Cloneable {
     }
 
     /**
+     * 获取对局历史记录（副本，含每手是否将军），供内置引擎重建搜索路径。
+     */
+    public synchronized List<MoveRecord> getHistoryRecords() {
+        return new ArrayList<>(history);
+    }
+
+    /**
      * 检查某方的将/帅是否被将军
      */
     public synchronized boolean isKingAttacked(boolean isRedKing) {

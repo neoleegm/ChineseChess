@@ -411,8 +411,12 @@ public class ChessPanel extends JPanel {
 
         soundManager.playMoveSound(capturedPiece != null);
         if (byAI) {
-            lastAiMessage = formatMoveDesc(fromRow, fromCol, toRow, toCol, movedPiece, capturedPiece)
-                + " | " + ai.getLastEngineMessage();
+            // 走法描述：中文记谱 + 坐标（与棋盘边缘坐标对应）
+            String desc = notation + " (" + fromRow + "," + fromCol + ")→(" + toRow + "," + toCol + ")";
+            if (capturedPiece != null) {
+                desc += " 吃" + capturedPiece.getName();
+            }
+            lastAiMessage = desc + " | " + ai.getLastEngineMessage();
         }
 
         refreshBoardStateCache();
@@ -557,8 +561,10 @@ public class ChessPanel extends JPanel {
                         hintFromCol = move[1];
                         hintToRow = move[2];
                         hintToCol = move[3];
+                        // 提示文案：中文记谱 + 坐标（与棋盘边缘坐标对应）
                         hintNotation = MoveNotation.toChineseNotation(
-                            board, new Move(move[0], move[1], move[2], move[3]));
+                            board, new Move(move[0], move[1], move[2], move[3]))
+                            + " (" + move[0] + "," + move[1] + ")→(" + move[2] + "," + move[3] + ")";
                     }
                 } catch (Exception e) {
                     e.printStackTrace();
@@ -697,18 +703,6 @@ public class ChessPanel extends JPanel {
         return message.substring(0, 40) + "...";
     }
 
-    private String formatMoveDesc(int fromRow, int fromCol, int toRow, int toCol,
-                                   ChessPiece piece, ChessPiece captured) {
-        if (piece == null) return "";
-        StringBuilder sb = new StringBuilder();
-        sb.append(piece.getName());
-        sb.append("[").append(fromRow).append(",").append(fromCol).append("]");
-        sb.append("→");
-        sb.append("[").append(toRow).append(",").append(toCol).append("]");
-        if (captured != null) sb.append(" 吃").append(captured.getName());
-        return sb.toString();
-    }
-
     @Override
     protected void paintComponent(Graphics g) {
         super.paintComponent(g);
@@ -718,6 +712,9 @@ public class ChessPanel extends JPanel {
 
         // 绘制棋盘背景
         drawBoard(g2d);
+
+        // 绘制边缘坐标（行号/列号，与状态栏走法坐标对应）
+        drawCoordinates(g2d);
 
         // 绘制最后一步标记
         if (lastFromRow != -1) {
@@ -838,6 +835,34 @@ public class ChessPanel extends JPanel {
         int x = MARGIN + (BOARD_WIDTH - textWidth) / 2;
         int y = MARGIN + 4 * CELL_SIZE + CELL_SIZE / 2 + fm.getAscent() / 2 - 4;
         g2d.drawString(chuHan, x, y);
+    }
+
+    /**
+     * 绘制棋盘边缘坐标：左侧行号 0-9、底部列号 0-8，
+     * 与状态栏走法描述中的 (行,列) 坐标一一对应
+     */
+    private void drawCoordinates(Graphics2D g2d) {
+        g2d.setFont(uiFont(Font.PLAIN, 13));
+        g2d.setColor(new Color(LINE_COLOR.getRed(), LINE_COLOR.getGreen(), LINE_COLOR.getBlue(), 200));
+        FontMetrics fm = g2d.getFontMetrics();
+
+        // 左侧行号
+        for (int row = 0; row < ChessBoard.ROWS; row++) {
+            String label = String.valueOf(row);
+            int y = MARGIN + row * CELL_SIZE;
+            g2d.drawString(label,
+                MARGIN - 16 - fm.stringWidth(label) / 2,
+                y + fm.getAscent() / 2 - 2);
+        }
+
+        // 底部列号
+        for (int col = 0; col < ChessBoard.COLS; col++) {
+            String label = String.valueOf(col);
+            int x = MARGIN + col * CELL_SIZE;
+            g2d.drawString(label,
+                x - fm.stringWidth(label) / 2,
+                MARGIN + BOARD_HEIGHT + 20);
+        }
     }
 
     private void drawPositionMark(Graphics2D g2d, int row, int col) {

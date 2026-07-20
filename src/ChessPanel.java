@@ -41,6 +41,7 @@ public class ChessPanel extends JPanel {
     private static final Color MOVE_HINT_COLOR = new Color(60, 160, 60, 180);
     private static final Color CAPTURE_HINT_COLOR = new Color(200, 60, 60, 200);
     private static final Color CHECK_FLASH_COLOR = new Color(255, 0, 0, 180);
+    private static final Color HINT_ARROW_COLOR = new Color(60, 100, 220, 190);
 
     private final ChessBoard board;
     private final ChessAI ai;
@@ -81,6 +82,14 @@ public class ChessPanel extends JPanel {
     // AI 后台任务（代际计数防止重置后陈旧结果落子）
     private SwingWorker<int[], Void> aiWorker;
     private int aiGeneration = 0;
+
+    // 提示功能：独立的高手引擎（始终困难档，与对局难度无关）
+    private final ChessAI hintAi = new ChessAI(ChessAI.Difficulty.HARD);
+    private SwingWorker<int[], Void> hintWorker;
+    private int hintGeneration = 0;
+    private boolean hintThinking = false;
+    private int hintFromRow = -1, hintFromCol = -1, hintToRow = -1, hintToCol = -1;
+    private String hintNotation = "";
 
     // 着法记谱（每手一条，偶数下标为红方）
     private final List<String> moveNotations = new ArrayList<>();
@@ -176,6 +185,7 @@ public class ChessPanel extends JPanel {
 
     public void setPikafishEnginePath(String path) {
         ai.setPikafishEnginePath(path);
+        hintAi.setPikafishEnginePath(path);
         updateStatus();
     }
 
@@ -209,7 +219,9 @@ public class ChessPanel extends JPanel {
      */
     public void shutdownAI() {
         cancelAI();
+        cancelHint();
         ai.shutdown();
+        hintAi.shutdown();
     }
 
     /**
@@ -267,7 +279,7 @@ public class ChessPanel extends JPanel {
 
         // 更新光标
         boolean overOwnPiece = false;
-        if (hoverRow != -1 && !gameOverCache && !aiThinking && !animating) {
+        if (hoverRow != -1 && !gameOverCache && !aiThinking && !animating && !hintThinking) {
             if (mode == GameMode.PVP || board.isRedTurn() == playerIsRed) {
                 ChessPiece p = board.getPiece(hoverRow, hoverCol);
                 overOwnPiece = p != null && p.isRed() == board.isRedTurn();
@@ -296,7 +308,7 @@ public class ChessPanel extends JPanel {
     }
 
     private void handleMouseClick(int x, int y) {
-        if (aiThinking || animating) return;
+        if (aiThinking || animating || hintThinking) return;
         if (gameOverCache) return;
 
         // 人机模式下，检查是否轮到玩家
@@ -388,6 +400,7 @@ public class ChessPanel extends JPanel {
             return;
         }
 
+        clearHint();
         moveNotations.add(notation);
 
         lastFromRow = fromRow;
@@ -510,9 +523,78 @@ public class ChessPanel extends JPanel {
         aiThinking = false;
     }
 
+    /**
+     * 高手提示：后台计算当前局面的推荐着法，并在棋盘上绘制箭头。
+     * 提示引擎始终为困难档（配置了 Pikafish 则优先 Pikafish），与对局难度无关。
+     */
+    public void requestHint() {
+        if (mode != GameMode.PVE) return;
+        if (aiThinking || animating || hintThinking || gameOverCache) return;
+        if (board.isRedTurn() != playerIsRed) return;
+
+        clearHint();
+        hintThinking = true;
+        final int generation = ++hintGeneration;
+        updateStatus();
+        repaint();
+
+        hintWorker = new SwingWorker<>() {
+            @Override
+            protected int[] doInBackground() throws Exception {
+                return hintAi.getNextMove(board, playerIsRed);
+            }
+
+            @Override
+            protected void done() {
+                // 代际不符或已取消：说明期间发生了重置/切换，丢弃结果
+                if (generation != hintGeneration || isCancelled()) {
+                    return;
+                }
+                try {
+                    int[] move = get();
+                    if (move != null) {
+                        hintFromRow = move[0];
+                        hintFromCol = move[1];
+                        hintToRow = move[2];
+                        hintToCol = move[3];
+                        hintNotation = MoveNotation.toChineseNotation(
+                            board, new Move(move[0], move[1], move[2], move[3]));
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                } finally {
+                    if (generation == hintGeneration) {
+                        hintThinking = false;
+                        updateStatus();
+                        repaint();
+                    }
+                }
+            }
+        };
+        hintWorker.execute();
+    }
+
+    private void clearHint() {
+        hintFromRow = -1;
+        hintNotation = "";
+    }
+
+    /**
+     * 取消进行中的提示计算并清除提示箭头
+     */
+    private void cancelHint() {
+        hintGeneration++;
+        if (hintWorker != null) {
+            hintWorker.cancel(true);
+            hintWorker = null;
+        }
+        hintThinking = false;
+        clearHint();
+    }
+
     public void undo() {
         if (board.getHistorySize() == 0) return;
-        if (aiThinking || animating) return;
+        if (aiThinking || animating || hintThinking) return;
 
         // 人机模式下需要悔两步
         board.undo();
@@ -528,6 +610,7 @@ public class ChessPanel extends JPanel {
         lastToRow = -1;
         lastToCol = -1;
         clearSelection();
+        clearHint();
 
         refreshBoardStateCache();
         fireGameEvent();
@@ -542,6 +625,7 @@ public class ChessPanel extends JPanel {
 
     public void reset() {
         cancelAI();
+        cancelHint();
         stopAnimation();
         board.reset();
         selectedRow = -1;
@@ -587,10 +671,16 @@ public class ChessPanel extends JPanel {
             statusLabel.setText(board.getWinner());
         } else if (aiThinking) {
             statusLabel.setText("AI 思考中...");
+        } else if (hintThinking) {
+            statusLabel.setText("提示计算中...");
         } else if (mode == GameMode.PVE) {
             String check = sideToMoveInCheck() ? "将军！" : "";
             if (board.isRedTurn() == playerIsRed) {
-                statusLabel.setText(check + (lastAiMessage.isBlank() ? "你的回合" : "你的回合 - " + summarizeEngineMessage(lastAiMessage)));
+                if (hintFromRow != -1) {
+                    statusLabel.setText(check + "提示：" + hintNotation);
+                } else {
+                    statusLabel.setText(check + (lastAiMessage.isBlank() ? "你的回合" : "你的回合 - " + summarizeEngineMessage(lastAiMessage)));
+                }
             } else {
                 statusLabel.setText("AI 思考中...");
             }
@@ -639,7 +729,7 @@ public class ChessPanel extends JPanel {
         drawMoveHints(g2d);
 
         // 绘制悬停高亮
-        if (hoverRow != -1 && !aiThinking && !animating && !gameOverCache) {
+        if (hoverRow != -1 && !aiThinking && !animating && !hintThinking && !gameOverCache) {
             ChessPiece p = board.getPiece(hoverRow, hoverCol);
             boolean canSelect = p != null && p.isRed() == board.isRedTurn();
             if (canSelect && (mode == GameMode.PVP || board.isRedTurn() == playerIsRed)) {
@@ -664,6 +754,11 @@ public class ChessPanel extends JPanel {
             drawPieceAt(g2d, animPiece,
                 MARGIN + (int) Math.round(colF * CELL_SIZE),
                 MARGIN + (int) Math.round(rowF * CELL_SIZE));
+        }
+
+        // 绘制提示箭头（蓝色，区别于走法提示与最后一步高亮）
+        if (hintFromRow != -1) {
+            drawHintArrow(g2d);
         }
 
         // 绘制将军闪烁提示
@@ -834,6 +929,49 @@ public class ChessPanel extends JPanel {
                 break;
             }
         }
+    }
+
+    /**
+     * 绘制高手提示：起点与终点蓝色圆环 + 半透明箭头连线
+     */
+    private void drawHintArrow(Graphics2D g2d) {
+        int x1 = MARGIN + hintFromCol * CELL_SIZE;
+        int y1 = MARGIN + hintFromRow * CELL_SIZE;
+        int x2 = MARGIN + hintToCol * CELL_SIZE;
+        int y2 = MARGIN + hintToRow * CELL_SIZE;
+
+        // 起止圆环
+        g2d.setColor(HINT_ARROW_COLOR);
+        g2d.setStroke(new BasicStroke(3.5f));
+        int r = PIECE_RADIUS + 6;
+        g2d.drawOval(x1 - r, y1 - r, r * 2, r * 2);
+        g2d.drawOval(x2 - r, y2 - r, r * 2, r * 2);
+
+        // 箭头连线（两端各缩一点，避免压住圆环）
+        double dx = x2 - x1;
+        double dy = y2 - y1;
+        double len = Math.hypot(dx, dy);
+        if (len < 1) return;
+        double ux = dx / len;
+        double uy = dy / len;
+        int sx = (int) Math.round(x1 + ux * (PIECE_RADIUS + 8));
+        int sy = (int) Math.round(y1 + uy * (PIECE_RADIUS + 8));
+        int ex = (int) Math.round(x2 - ux * (PIECE_RADIUS + 10));
+        int ey = (int) Math.round(y2 - uy * (PIECE_RADIUS + 10));
+        g2d.setStroke(new BasicStroke(4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        g2d.drawLine(sx, sy, ex, ey);
+
+        // 箭头头部
+        double angle = Math.atan2(dy, dx);
+        int headLen = 14;
+        double a1 = angle + Math.toRadians(150);
+        double a2 = angle - Math.toRadians(150);
+        g2d.drawLine(ex, ey,
+            (int) Math.round(ex + headLen * Math.cos(a1)),
+            (int) Math.round(ey + headLen * Math.sin(a1)));
+        g2d.drawLine(ex, ey,
+            (int) Math.round(ex + headLen * Math.cos(a2)),
+            (int) Math.round(ey + headLen * Math.sin(a2)));
     }
 
     private void drawPieceAt(Graphics2D g2d, ChessPiece piece, int x, int y) {

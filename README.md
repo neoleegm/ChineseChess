@@ -38,7 +38,8 @@ A graphical Chinese Chess game developed with Java Swing, supporting both player
 - 🎨 **精美界面**：木质棋盘、双层边框棋子、位置标记、走子滑动动画
 - 🔊 **音效提示**：选择、移动、吃子、将军、胜利音效
 - ↩️ **悔棋功能**：支持悔棋，人机模式下悔双方各一步
-- 📜 **着法历史**：侧边栏中文记谱（如 炮二平五、马8进7）
+- 📜 **对局记录栏**：右侧独立栏，中文记谱着法列表 + 双方被吃子，几十回合一目了然
+- 💡 **高手提示**：人机对战中按"提示"按钮或 H 键，高手级引擎推荐着法并以蓝色箭头标出
 - 💀 **被吃子展示**：实时显示双方被吃棋子
 - ⚖️ **完整胜负判定**：将死、困毙判负，三次重复局面判和，长将作负
 - 💾 **设置记忆**：模式、难度、执棋方、音效设置自动保存
@@ -54,7 +55,8 @@ A graphical Chinese Chess game developed with Java Swing, supporting both player
 - 🎨 **Beautiful UI**: Wooden board style, double-border pieces, position markers, smooth move animation
 - 🔊 **Sound Effects**: Selection, move, capture, check, and win sounds
 - ↩️ **Undo**: Support undo moves, undoes both sides in PvE mode
-- 📜 **Move History**: Chinese notation list in the sidebar (e.g. 炮二平五)
+- 📜 **Game Record Panel**: Dedicated right panel with Chinese-notation move list and captured pieces, readable for dozens of rounds
+- 💡 **Expert Hint**: In PvE, press the Hint button or H key — the expert engine suggests a move and marks it with a blue arrow
 - 💀 **Captured Pieces**: Real-time display of captured pieces for both sides
 - ⚖️ **Full Adjudication**: Checkmate and stalemate losses, threefold-repetition draw, perpetual check loss
 - 💾 **Persistent Settings**: Mode, difficulty, side, and sound settings are saved
@@ -122,6 +124,7 @@ java -cp bin ChineseChessTests
 6. **快捷键**
    - `U` - 悔棋
    - `R` - 重新开始
+   - `H` - 提示（人机对战）
    - `Q` - 退出游戏
 
 ### English Instructions
@@ -149,6 +152,7 @@ java -cp bin ChineseChessTests
 6. **Keyboard Shortcuts**
    - `U` - Undo move
    - `R` - Restart game
+   - `H` - Expert hint (PvE only)
    - `Q` - Quit game
 
 ---
@@ -245,6 +249,11 @@ ChineseChess/
 ---
 
 ## 📝 更新日志 / Changelog
+
+### v3.1
+- ✅ 三栏布局：左侧游戏设置、中间棋盘、右侧对局记录（着法列表占满栏高，不再被压缩）
+- ✅ 高手提示：人机对战中按 H 或"提示"按钮，独立困难档引擎（配置了 Pikafish 则用 Pikafish）推荐着法并以蓝色箭头标出
+- ✅ AI 避免长将：搜索按长将规则判负评分，三档 AI 均不主动长将送负
 
 ### v3.0
 - ✅ 规则完善：三次重复局面判和、长将作负，终局区分将死/困毙/和棋文案

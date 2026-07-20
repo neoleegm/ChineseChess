@@ -10,7 +10,7 @@ import java.util.prefs.Preferences;
 
 /**
  * 中国象棋游戏主类
- * 主窗口和侧边栏控制面板
+ * 主窗口：左侧游戏设置，中间棋盘，右侧对局记录（着法与被吃子）
  */
 public class ChineseChessGame extends JFrame {
     private static final long serialVersionUID = 1L;
@@ -26,6 +26,7 @@ public class ChineseChessGame extends JFrame {
     private static final Color BUTTON_BG = new Color(210, 180, 140);
     private static final Color BUTTON_HOVER = new Color(230, 200, 160);
     private static final Color PANEL_BG = new Color(245, 222, 179);
+    private static final Color RECORD_BG = new Color(252, 240, 210);
 
     // 各棋子初始数量（按 ChessPiece.Type 的 ordinal：将帅、仕士、相象、马、车、炮、兵卒）
     private static final int[] INITIAL_PIECE_COUNTS = {1, 2, 2, 2, 2, 2, 5};
@@ -42,6 +43,7 @@ public class ChineseChessGame extends JFrame {
     private JCheckBox soundCheckBox;
     private JButton engineButton;
     private JLabel engineStatusLabel;
+    private JButton hintButton;
     private JLabel redCapturedLabel;
     private JLabel blackCapturedLabel;
     private DefaultListModel<String> moveListModel;
@@ -87,9 +89,9 @@ public class ChineseChessGame extends JFrame {
         }
         mainPanel.add(chessPanel, BorderLayout.CENTER);
 
-        // 创建侧边栏
-        JPanel sidebar = createSidebar();
-        mainPanel.add(sidebar, BorderLayout.WEST);
+        // 左侧：游戏设置；右侧：对局记录
+        mainPanel.add(createSidebar(), BorderLayout.WEST);
+        mainPanel.add(createRecordPanel(), BorderLayout.EAST);
 
         // 走子/悔棋/重置时刷新着法列表与被吃子展示
         chessPanel.setGameEventListener(this::refreshMoveDisplays);
@@ -113,6 +115,9 @@ public class ChineseChessGame extends JFrame {
         });
     }
 
+    /**
+     * 左侧边栏：游戏设置与操作按钮
+     */
     private JPanel createSidebar() {
         JPanel panel = new JPanel();
         panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
@@ -216,33 +221,12 @@ public class ChineseChessGame extends JFrame {
             preferences.putBoolean(PREF_SOUND, soundCheckBox.isSelected());
         });
         panel.add(soundCheckBox);
-        panel.add(Box.createVerticalStrut(12));
-
-        // 被吃子展示
-        panel.add(createLabel("红方被吃:"));
-        redCapturedLabel = createCapturedLabel();
-        panel.add(redCapturedLabel);
-        panel.add(Box.createVerticalStrut(6));
-        panel.add(createLabel("黑方被吃:"));
-        blackCapturedLabel = createCapturedLabel();
-        panel.add(blackCapturedLabel);
-        panel.add(Box.createVerticalStrut(12));
-
-        // 着法历史
-        panel.add(createLabel("着法:"));
-        moveListModel = new DefaultListModel<>();
-        moveList = new JList<>(moveListModel);
-        moveList.setFont(ChessPanel.uiFont(Font.PLAIN, 13));
-        moveList.setBackground(new Color(252, 240, 210));
-        moveList.setForeground(WOOD_DARK);
-        JScrollPane moveScroll = new JScrollPane(moveList);
-        moveScroll.setPreferredSize(new Dimension(170, 150));
-        moveScroll.setMaximumSize(new Dimension(Integer.MAX_VALUE, 200));
-        moveScroll.setAlignmentX(Component.LEFT_ALIGNMENT);
-        panel.add(moveScroll);
-        panel.add(Box.createVerticalStrut(12));
+        panel.add(Box.createVerticalStrut(16));
 
         // 按钮
+        hintButton = createButton("提示", e -> chessPanel.requestHint());
+        panel.add(hintButton);
+        panel.add(Box.createVerticalStrut(10));
         panel.add(createButton("重新开始", e -> {
             if (confirmResetIfInProgress()) chessPanel.reset();
         }));
@@ -257,9 +241,64 @@ public class ChineseChessGame extends JFrame {
         return panel;
     }
 
+    /**
+     * 右侧栏：对局记录（黑方被吃在顶部，着法列表占满中部，红方被吃在底部）
+     */
+    private JPanel createRecordPanel() {
+        JPanel panel = new JPanel(new BorderLayout(6, 6));
+        panel.setBackground(PANEL_BG);
+        panel.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(WOOD_DARK, 2),
+            new EmptyBorder(15, 15, 15, 15)
+        ));
+        panel.setPreferredSize(new Dimension(210, 0));
+
+        // 顶部：标题 + 黑方被吃（靠近黑方一侧）
+        JPanel northPanel = new JPanel();
+        northPanel.setLayout(new BoxLayout(northPanel, BoxLayout.Y_AXIS));
+        northPanel.setBackground(PANEL_BG);
+        JLabel titleLabel = new JLabel("对局记录");
+        titleLabel.setFont(ChessPanel.uiFont(Font.BOLD, 18));
+        titleLabel.setForeground(WOOD_DARK);
+        titleLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+        northPanel.add(titleLabel);
+        northPanel.add(Box.createVerticalStrut(12));
+        northPanel.add(createLabel("黑方被吃:"));
+        blackCapturedLabel = createCapturedLabel();
+        northPanel.add(blackCapturedLabel);
+        panel.add(northPanel, BorderLayout.NORTH);
+
+        // 中部：着法列表，占满剩余全部高度
+        JPanel centerPanel = new JPanel(new BorderLayout(4, 4));
+        centerPanel.setBackground(PANEL_BG);
+        centerPanel.add(createLabel("着法:"), BorderLayout.NORTH);
+        moveListModel = new DefaultListModel<>();
+        moveList = new JList<>(moveListModel);
+        moveList.setFont(ChessPanel.uiFont(Font.PLAIN, 14));
+        moveList.setFixedCellHeight(26);
+        moveList.setBackground(RECORD_BG);
+        moveList.setForeground(WOOD_DARK);
+        moveList.setSelectionBackground(new Color(120, 170, 110));
+        moveList.setSelectionForeground(Color.WHITE);
+        JScrollPane moveScroll = new JScrollPane(moveList);
+        centerPanel.add(moveScroll, BorderLayout.CENTER);
+        panel.add(centerPanel, BorderLayout.CENTER);
+
+        // 底部：红方被吃（靠近红方一侧）
+        JPanel southPanel = new JPanel();
+        southPanel.setLayout(new BoxLayout(southPanel, BoxLayout.Y_AXIS));
+        southPanel.setBackground(PANEL_BG);
+        southPanel.add(createLabel("红方被吃:"));
+        redCapturedLabel = createCapturedLabel();
+        southPanel.add(redCapturedLabel);
+        panel.add(southPanel, BorderLayout.SOUTH);
+
+        return panel;
+    }
+
     private JLabel createCapturedLabel() {
         JLabel label = new JLabel("无");
-        label.setFont(ChessPanel.uiFont(Font.PLAIN, 13));
+        label.setFont(ChessPanel.uiFont(Font.PLAIN, 14));
         label.setForeground(WOOD_DARK);
         label.setAlignmentX(Component.LEFT_ALIGNMENT);
         return label;
@@ -305,6 +344,7 @@ public class ChineseChessGame extends JFrame {
         difficultyCombo.setEnabled(isPVE);
         sideCombo.setEnabled(isPVE);
         engineButton.setEnabled(isPVE);
+        hintButton.setEnabled(isPVE);
     }
 
     /**
@@ -370,7 +410,9 @@ public class ChineseChessGame extends JFrame {
             moveListModel.addElement(row);
         }
         if (!notations.isEmpty()) {
-            moveList.ensureIndexIsVisible(moveListModel.getSize() - 1);
+            int last = moveListModel.getSize() - 1;
+            moveList.setSelectedIndex(last);
+            moveList.ensureIndexIsVisible(last);
         }
     }
 
@@ -462,6 +504,7 @@ public class ChineseChessGame extends JFrame {
                     case KeyEvent.VK_R -> {
                         if (confirmResetIfInProgress()) chessPanel.reset();
                     }
+                    case KeyEvent.VK_H -> chessPanel.requestHint();
                     case KeyEvent.VK_Q -> quitGame();
                 }
                 return false;
@@ -499,6 +542,7 @@ public class ChineseChessGame extends JFrame {
             【快捷键】
             U - 悔棋
             R - 重新开始
+            H - 提示（人机对战）
             Q - 退出游戏
             """;
 
@@ -518,7 +562,7 @@ public class ChineseChessGame extends JFrame {
     private void showAbout() {
         JOptionPane.showMessageDialog(this,
             """
-            中国象棋 v2.0
+            中国象棋 v3.1
 
             使用 Java Swing 开发
             支持人机对战和人人对战

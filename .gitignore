@@ -19,3 +19,6 @@ Thumbs.db
 *.tmp
 *.swp
 *~
+
+# Pikafish 神经网络（大二进制，从官方发布包获取）
+pikafish.nnue

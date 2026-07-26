@@ -27,6 +27,11 @@ public class ChessAI {
     private final InternalChessEngine internalEngine;
     private PikafishEngine pikafishEngine;
     private String lastEngineMessage = "内置 AI";
+    // 连续失败达到阈值后本会话内跳过 Pikafish，避免每次都白等超时
+    private static final int PIKAFISH_MAX_FAILURES = 2;
+    private int pikafishFailures = 0;
+    // 覆盖思考时间（毫秒，>0 时生效），用于提示功能缩短等待
+    private long timeLimitOverrideMs = -1;
 
     public ChessAI(Difficulty difficulty) {
         this.difficulty = difficulty;
@@ -48,6 +53,7 @@ public class ChessAI {
             pikafishEngine.shutdown();
             pikafishEngine = null;
         }
+        pikafishFailures = 0;
         if (enginePath == null || enginePath.isBlank()) {
             lastEngineMessage = "未配置 Pikafish，使用内置 AI";
         } else {
@@ -58,10 +64,6 @@ public class ChessAI {
 
     public String getPikafishEnginePath() {
         return pikafishEngine == null ? "" : pikafishEngine.getEnginePath();
-    }
-
-    public boolean hasPikafishEngine() {
-        return pikafishEngine != null;
     }
 
     public String getLastEngineMessage() {
@@ -77,17 +79,16 @@ public class ChessAI {
         }
     }
 
-    /**
-     * 获取 AI 的下一步走法。兼容旧调用：默认 AI 执黑。
-     * @return int[]{fromRow, fromCol, toRow, toCol} 或 null
-     */
-    public int[] getNextMove(ChessBoard board) {
-        return getNextMove(board, false);
-    }
-
     public int[] getNextMove(ChessBoard board, boolean aiIsRed) {
         Move move = findBestMove(board, aiIsRed);
         return move == null ? null : move.toArray();
+    }
+
+    /**
+     * 覆盖思考时间（提示功能用较短预算），传入 -1 恢复按难度默认
+     */
+    public void setTimeLimitOverride(long ms) {
+        this.timeLimitOverrideMs = ms;
     }
 
     public Move findBestMove(ChessBoard board, boolean aiIsRed) {
@@ -96,18 +97,23 @@ public class ChessAI {
         ChessBoard work = board.clone();
 
         Move move = null;
-        if (difficulty == Difficulty.HARD && pikafishEngine != null) {
+        if (difficulty == Difficulty.HARD && pikafishEngine != null && pikafishFailures < PIKAFISH_MAX_FAILURES) {
             try {
                 Move candidate = pikafishEngine.findBestMove(work, aiIsRed, timeMs);
                 if (isMoveForSide(work, candidate, aiIsRed) && work.isLegalMove(candidate)) {
                     lastEngineMessage = "Pikafish";
                     move = candidate;
+                    pikafishFailures = 0;
                 } else {
+                    pikafishFailures++;
                     lastEngineMessage = "Pikafish 返回非法走法，已回退内置 AI";
                 }
             } catch (Exception e) {
+                pikafishFailures++;
                 lastEngineMessage = "Pikafish 不可用，已回退内置 AI: " + e.getMessage();
             }
+        } else if (difficulty == Difficulty.HARD && pikafishEngine != null) {
+            lastEngineMessage = "Pikafish 连续失败，改用内置 AI";
         } else {
             lastEngineMessage = "内置 AI";
         }
@@ -156,6 +162,9 @@ public class ChessAI {
     }
 
     private long getThinkTimeMs() {
+        if (timeLimitOverrideMs > 0) {
+            return timeLimitOverrideMs;
+        }
         return switch (difficulty) {
             case EASY -> EASY_TIME_MS;
             case MEDIUM -> MEDIUM_TIME_MS;

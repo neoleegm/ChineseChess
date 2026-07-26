@@ -734,10 +734,6 @@ public class ChessBoard implements Cloneable {
         return zobristKey;
     }
 
-    public synchronized int getRepetitionCount() {
-        return positionCounts.getOrDefault(zobristKey, 0);
-    }
-
     /**
      * 获取当前重复局面裁决结果（未触发时为 NONE）
      */

@@ -26,10 +26,6 @@ public class SoundManager {
         this.enabled = enabled;
     }
 
-    public boolean isEnabled() {
-        return enabled;
-    }
-
     /**
      * 播放选择棋子的音效
      */

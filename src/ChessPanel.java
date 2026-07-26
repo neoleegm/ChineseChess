@@ -83,11 +83,13 @@ public class ChessPanel extends JPanel {
     private SwingWorker<int[], Void> aiWorker;
     private int aiGeneration = 0;
 
-    // 提示功能：独立的高手引擎（始终困难档，与对局难度无关）
+    // 提示功能：独立的高手引擎（始终困难档，与对局难度无关；用较短预算保证响应）
+    private static final long HINT_TIME_MS = 2500;
     private final ChessAI hintAi = new ChessAI(ChessAI.Difficulty.HARD);
     private SwingWorker<int[], Void> hintWorker;
     private int hintGeneration = 0;
     private boolean hintThinking = false;
+    private Timer hintWatchdog;
     private int hintFromRow = -1, hintFromCol = -1, hintToRow = -1, hintToCol = -1;
     private String hintNotation = "";
 
@@ -120,6 +122,7 @@ public class ChessPanel extends JPanel {
         this.statusLabel = statusLabel;
         this.ai = new ChessAI(ChessAI.Difficulty.MEDIUM);
         this.soundManager = new SoundManager();
+        this.hintAi.setTimeLimitOverride(HINT_TIME_MS);
 
         setPreferredSize(new Dimension(MARGIN * 2 + BOARD_WIDTH, MARGIN * 2 + BOARD_HEIGHT));
         setBackground(BOARD_COLOR_LIGHT);
@@ -193,10 +196,6 @@ public class ChessPanel extends JPanel {
         return ai.getPikafishEnginePath();
     }
 
-    public String getEngineMessage() {
-        return ai.getLastEngineMessage();
-    }
-
     public void setPlayerSide(boolean isRed) {
         this.playerIsRed = isRed;
         if (mode == GameMode.PVE) reset();
@@ -208,10 +207,6 @@ public class ChessPanel extends JPanel {
 
     public void setSoundEnabled(boolean enabled) {
         soundManager.setEnabled(enabled);
-    }
-
-    public boolean isSoundEnabled() {
-        return soundManager.isEnabled();
     }
 
     /**
@@ -530,11 +525,16 @@ public class ChessPanel extends JPanel {
     /**
      * 高手提示：后台计算当前局面的推荐着法，并在棋盘上绘制箭头。
      * 提示引擎始终为困难档（配置了 Pikafish 则优先 Pikafish），与对局难度无关。
+     * 带 15 秒看门狗：worker 异常时按钮不会永久失效。
      */
     public void requestHint() {
         if (mode != GameMode.PVE) return;
         if (aiThinking || animating || hintThinking || gameOverCache) return;
-        if (board.isRedTurn() != playerIsRed) return;
+        if (board.isRedTurn() != playerIsRed) {
+            // 非玩家回合：明确反馈而不是静默忽略
+            flashStatusMessage("请等 AI 走棋后再试");
+            return;
+        }
 
         clearHint();
         hintThinking = true;
@@ -570,6 +570,7 @@ public class ChessPanel extends JPanel {
                     e.printStackTrace();
                 } finally {
                     if (generation == hintGeneration) {
+                        stopHintWatchdog();
                         hintThinking = false;
                         updateStatus();
                         repaint();
@@ -577,6 +578,17 @@ public class ChessPanel extends JPanel {
                 }
             }
         };
+
+        // 看门狗：worker 意外不返回时自动复位，保证提示按钮始终可用
+        hintWatchdog = new Timer(15000, ev -> {
+            if (hintThinking) {
+                cancelHint();
+                flashStatusMessage("提示超时，请重试");
+            }
+        });
+        hintWatchdog.setRepeats(false);
+        hintWatchdog.start();
+
         hintWorker.execute();
     }
 
@@ -590,12 +602,45 @@ public class ChessPanel extends JPanel {
      */
     private void cancelHint() {
         hintGeneration++;
+        stopHintWatchdog();
         if (hintWorker != null) {
             hintWorker.cancel(true);
             hintWorker = null;
         }
         hintThinking = false;
         clearHint();
+    }
+
+    private void stopHintWatchdog() {
+        if (hintWatchdog != null) {
+            hintWatchdog.stop();
+            hintWatchdog = null;
+        }
+    }
+
+    /**
+     * 在状态栏短暂显示一条提示，2 秒后恢复正常状态文本
+     */
+    private void flashStatusMessage(String message) {
+        statusLabel.setText(message);
+        Timer t = new Timer(2000, ev -> updateStatus());
+        t.setRepeats(false);
+        t.start();
+    }
+
+    // ---- 测试钩子（包内可见，供 HintFlowTest 使用） ----
+
+    int[] getHintMoveForTesting() {
+        return hintFromRow == -1 ? null
+            : new int[]{hintFromRow, hintFromCol, hintToRow, hintToCol};
+    }
+
+    boolean isBusyForTesting() {
+        return aiThinking || animating || hintThinking;
+    }
+
+    boolean isGameOverForTesting() {
+        return gameOverCache;
     }
 
     public void undo() {
@@ -764,13 +809,13 @@ public class ChessPanel extends JPanel {
             if (blackInCheckCache) drawCheckFlash(g2d, false);
         }
 
-        // 绘制AI思考提示
-        if (aiThinking) {
+        // 绘制AI思考/提示计算提示
+        if (aiThinking || hintThinking) {
             g2d.setColor(AI_THINKING_COLOR);
             g2d.fillRect(0, 0, getWidth(), getHeight());
             g2d.setColor(Color.WHITE);
             g2d.setFont(uiFont(Font.BOLD, 28));
-            String msg = "AI 思考中...";
+            String msg = aiThinking ? "AI 思考中..." : "提示计算中...";
             FontMetrics fm = g2d.getFontMetrics();
             int tx = (getWidth() - fm.stringWidth(msg)) / 2;
             int ty = getHeight() / 2 + fm.getAscent() / 2 - 5;

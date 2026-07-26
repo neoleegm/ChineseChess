@@ -242,19 +242,30 @@ ChineseChess/
 
 ### Pikafish 配置 / Pikafish Setup
 
-1. 从 [Pikafish Releases](https://github.com/official-pikafish/Pikafish/releases) 下载适合系统的版本。
-2. 解压后在游戏侧边栏点击“选择 Pikafish 引擎”，选择 `pikafish` 可执行文件。
-3. 选择会保存在本机 Java Preferences 中；困难模式会优先使用 Pikafish，失败时回退内置 AI。
+仓库已内置官方 Pikafish 2026-01-02（Apple Silicon）与配套的 `pikafish.nnue`，开箱即用。
+若需自行配置：
+
+1. 从 [Pikafish Releases](https://github.com/official-pikafish/Pikafish/releases) 下载适合系统的版本（官方发布包内含引擎与配套 `pikafish.nnue`）。
+2. 把引擎可执行文件与 `pikafish.nnue` 放在同一目录（引擎默认从该目录加载网络文件）。
+3. 在游戏侧边栏点击“选择 Pikafish 引擎”，选择 `pikafish` 可执行文件。
+4. 选择会保存在本机 Java Preferences 中；困难模式与"提示"功能会优先使用 Pikafish，失败时回退内置 AI。
 
 ---
 
 ## 📝 更新日志 / Changelog
+
+### v3.2
+- ✅ 修复"提示"失灵根因：内置 Pikafish 缺配套神经网络文件，每次搜索即崩导致连锁超时；现内置官方 Pikafish 2026-01-02 与配套 nnue，提示达大师级水平
+- ✅ 提示加 15 秒看门狗兜底，按钮永不永久失效；非玩家回合按提示有明确反馈
+- ✅ 新增 HintFlowTest 端到端验收：全程用提示与中等 AI 对弈，执红执黑两局全胜
+- ✅ 提示独立 2.5 秒预算、Pikafish 连续失败熔断、计算中棋盘遮罩
 
 ### v3.1
 - ✅ 三栏布局：左侧游戏设置、中间棋盘、右侧对局记录（着法列表占满栏高，不再被压缩）
 - ✅ 高手提示：人机对战中按 H 或"提示"按钮，独立困难档引擎（配置了 Pikafish 则用 Pikafish）推荐着法并以蓝色箭头标出
 - ✅ AI 避免长将：搜索按长将规则判负评分，三档 AI 均不主动长将送负
 - ✅ 棋盘边缘标注行列坐标，走法描述升级为"中文记谱 + 坐标"双显示
+- ✅ 提示功能修复：独立 2.5 秒预算、Pikafish 连续失败后熔断跳过、计算中棋盘显示遮罩
 
 ### v3.0
 - ✅ 规则完善：三次重复局面判和、长将作负，终局区分将死/困毙/和棋文案

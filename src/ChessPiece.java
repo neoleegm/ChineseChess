@@ -9,30 +9,24 @@ public class ChessPiece implements Serializable, Cloneable {
     
     // 棋子类型
     public enum Type {
-        KING("帅", "将", 10000),      // 帅/将
-        ADVISOR("仕", "士", 200),     // 仕/士
-        ELEPHANT("相", "象", 200),    // 相/象
-        HORSE("傌", "马", 450),        // 傌/马
-        ROOK("俥", "车", 900),         // 俥/车
-        CANNON("炮", "砲", 500),       // 炮/砲
-        PAWN("兵", "卒", 100);         // 兵/卒
-        
+        KING("帅", "将"),      // 帅/将
+        ADVISOR("仕", "士"),   // 仕/士
+        ELEPHANT("相", "象"),  // 相/象
+        HORSE("傌", "马"),     // 傌/马
+        ROOK("俥", "车"),      // 俥/车
+        CANNON("炮", "砲"),    // 炮/砲
+        PAWN("兵", "卒");      // 兵/卒
+
         private final String redName;
         private final String blackName;
-        private final int value;
-        
-        Type(String redName, String blackName, int value) {
+
+        Type(String redName, String blackName) {
             this.redName = redName;
             this.blackName = blackName;
-            this.value = value;
         }
-        
+
         public String getName(boolean isRed) {
             return isRed ? redName : blackName;
-        }
-        
-        public int getValue() {
-            return value;
         }
     }
     
@@ -72,11 +66,7 @@ public class ChessPiece implements Serializable, Cloneable {
     public String getName() {
         return type.getName(isRed);
     }
-    
-    public int getValue() {
-        return type.getValue();
-    }
-    
+
     @Override
     public ChessPiece clone() {
         try {

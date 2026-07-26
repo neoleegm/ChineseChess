@@ -16,13 +16,6 @@ public final class Move {
         this.toCol = toCol;
     }
 
-    public static Move fromArray(int[] move) {
-        if (move == null || move.length < 4) {
-            return null;
-        }
-        return new Move(move[0], move[1], move[2], move[3]);
-    }
-
     public int[] toArray() {
         return new int[]{fromRow, fromCol, toRow, toCol};
     }

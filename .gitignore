@@ -1,9 +1,11 @@
 # 编译输出
-bin/
+build/
 out/
+bin/
 *.class
+*.jar
 
-# IDE 配置文件
+# IDE 配置
 .classpath
 .project
 .settings/

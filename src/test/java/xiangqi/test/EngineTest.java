@@ -1,0 +1,148 @@
+package xiangqi.test;
+
+import xiangqi.ai.AiPlayer;
+import xiangqi.ai.Difficulty;
+import xiangqi.ai.SearchEngine;
+import xiangqi.ai.SearchLimits;
+import xiangqi.ai.SearchResult;
+import xiangqi.core.Board;
+import xiangqi.core.Move;
+import xiangqi.core.Piece;
+
+/**
+ * 引擎测试：战术正确性、着法合法性、时间约束、长将自保。
+ */
+final class EngineTest {
+
+    private EngineTest() {
+    }
+
+    static void run() {
+        System.out.println("[AI 引擎]");
+        Checks.test("吃掉白送的车", EngineTest::takesHangingRook);
+        Checks.test("找到一步杀", EngineTest::findsMateInOne);
+        Checks.test("各档位都返回合法着法", EngineTest::allDifficultiesLegal);
+        Checks.test("遵守思考时间上限", EngineTest::respectsTimeLimit);
+        Checks.test("避免立即长将作负", EngineTest::avoidsPerpetualLoss);
+        Checks.test("自对弈 30 手全部合法", EngineTest::selfPlayLegal);
+    }
+
+    private static Board empty() {
+        Board board = new Board();
+        board.clear();
+        return board;
+    }
+
+    private static void takesHangingRook() {
+        Board board = empty();
+        board.place(Piece.Type.KING, true, 9, 4);
+        board.place(Piece.Type.KING, false, 0, 3);
+        board.place(Piece.Type.ROOK, true, 4, 0);
+        board.place(Piece.Type.ROOK, false, 4, 8);
+
+        SearchEngine engine = new SearchEngine();
+        SearchResult result = engine.search(board, SearchLimits.of(8, 800));
+        Checks.equal(new Move(4, 0, 4, 8), result.move(), "应吃掉白送的车");
+    }
+
+    private static void findsMateInOne() {
+        Board board = empty();
+        board.place(Piece.Type.KING, false, 0, 3);
+        board.place(Piece.Type.KING, true, 9, 5);
+        board.place(Piece.Type.ROOK, true, 1, 5);
+        board.place(Piece.Type.ROOK, true, 5, 0);
+
+        SearchEngine engine = new SearchEngine();
+        SearchResult result = engine.search(board, SearchLimits.of(6, 1_000));
+        Checks.notNull(result.move(), "应返回着法");
+        Checks.isTrue(board.play(result.move()), "杀着应可执行");
+        Checks.isTrue(board.isGameOver(), "一步应成杀");
+    }
+
+    private static void allDifficultiesLegal() {
+        for (Difficulty difficulty : Difficulty.values()) {
+            AiPlayer player = new AiPlayer();
+            player.setDifficulty(difficulty);
+            player.setTimeOverride(300);
+
+            Board board = new Board();
+            Move move = player.chooseMove(board);
+            Checks.notNull(move, difficulty.label() + " 应返回着法");
+            Checks.isTrue(board.isLegalMove(move), difficulty.label() + " 着法应合法");
+
+            Board black = new Board();
+            black.setRedTurn(false);
+            Move blackMove = player.chooseMove(black);
+            Checks.notNull(blackMove, difficulty.label() + " 执黑应返回着法");
+            Checks.isTrue(black.isLegalMove(blackMove), difficulty.label() + " 黑方着法应合法");
+        }
+    }
+
+    private static void respectsTimeLimit() {
+        Board board = new Board();
+        SearchEngine engine = new SearchEngine();
+        long start = System.nanoTime();
+        SearchResult result = engine.search(board, SearchLimits.of(64, 300));
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+        Checks.notNull(result.move(), "应返回着法");
+        Checks.isTrue(elapsedMs < 2_500, "300ms 预算不应跑 " + elapsedMs + "ms");
+        Checks.isTrue(result.depth() >= 1, "至少完成一层");
+    }
+
+    /**
+     * 长将自保：摆一个「红车每步都将军、黑将左右闪避」的循环，走到第三次重复的前一手。
+     * 此时红方若再走 5,3→5,4 就会因长将作负，三档 AI 都必须避开。
+     */
+    private static void avoidsPerpetualLoss() {
+        Board board = empty();
+        board.place(Piece.Type.KING, true, 9, 5);
+        board.place(Piece.Type.KING, false, 0, 4);
+        board.place(Piece.Type.ROOK, true, 5, 4);
+        board.setRedTurn(false);
+
+        int[][] cycle = {
+                {0, 4, 0, 3}, {5, 4, 5, 3},
+                {0, 3, 0, 4}, {5, 3, 5, 4},
+                {0, 4, 0, 3}, {5, 4, 5, 3},
+                {0, 3, 0, 4}
+        };
+        for (int[] move : cycle) {
+            Checks.isTrue(board.play(new Move(move[0], move[1], move[2], move[3])),
+                    "循环着法应可走：" + move[0] + "," + move[1] + "->" + move[2] + "," + move[3]);
+        }
+        Checks.isFalse(board.isGameOver(), "此时尚未终局");
+
+        // 确认这一手确实是「立即判负」的那一手，否则用例本身失去意义
+        Board probe = board.copy();
+        Checks.isTrue(probe.play(new Move(5, 3, 5, 4)), "探针着法应可走");
+        Checks.equal(Board.RepetitionOutcome.RED_LOSES, probe.repetitionOutcome(),
+                "探针着法应触发红方长将作负");
+
+        for (Difficulty difficulty : Difficulty.values()) {
+            AiPlayer player = new AiPlayer();
+            player.setDifficulty(difficulty);
+            player.setTimeOverride(300);
+            Move move = player.chooseMove(board);
+            Checks.notNull(move, difficulty.label() + " 应返回着法");
+            Checks.isFalse(move.fromRow() == 5 && move.fromCol() == 3
+                            && move.toRow() == 5 && move.toCol() == 4,
+                    difficulty.label() + " 不应走出立即判负的长将");
+        }
+    }
+
+    private static void selfPlayLegal() {
+        Board board = new Board();
+        SearchEngine engine = new SearchEngine();
+        int plies = 0;
+        while (plies < 30 && !board.isGameOver()) {
+            SearchResult result = engine.search(board, SearchLimits.of(5, 120));
+            if (result.move() == null) {
+                break;
+            }
+            Checks.isTrue(board.isLegalMove(result.move()), "第 " + (plies + 1) + " 手应合法");
+            Checks.isTrue(board.play(result.move()), "第 " + (plies + 1) + " 手应可执行");
+            plies++;
+        }
+        Checks.isTrue(plies >= 10, "自对弈至少走 10 手，实际 " + plies);
+    }
+}

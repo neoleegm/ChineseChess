@@ -72,6 +72,19 @@ final class Ui {
         return button;
     }
 
+    /**
+     * 把 accent 按比例混进 base，得到<strong>不透明</strong>的浅色底。
+     *
+     * <p>不要直接把带 alpha 的颜色设成组件背景：部分 LAF 不做合成，
+     * 会把半透明色渲染成纯黑（深色主题下尤其明显）。</p>
+     */
+    static Color tint(Color base, Color accent, float ratio) {
+        return new Color(
+                Math.round(base.getRed() + (accent.getRed() - base.getRed()) * ratio),
+                Math.round(base.getGreen() + (accent.getGreen() - base.getGreen()) * ratio),
+                Math.round(base.getBlue() + (accent.getBlue() - base.getBlue()) * ratio));
+    }
+
     static void applyTheme(JComponent component, Theme theme) {
         component.setBackground(theme.panelBg);
         component.setForeground(theme.panelText);

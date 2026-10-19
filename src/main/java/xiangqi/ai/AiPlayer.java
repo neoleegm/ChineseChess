@@ -4,9 +4,7 @@ import xiangqi.core.Board;
 import xiangqi.core.Move;
 import xiangqi.core.Piece;
 
-import java.util.ArrayList;
 import java.util.List;
-import java.util.Random;
 
 /**
  * AI 门面：按难度选择实现，负责外部引擎回退、着法合法性兜底、长将自保。
@@ -17,9 +15,10 @@ import java.util.Random;
 public final class AiPlayer {
 
     private static final int UCI_MAX_FAILURES = 2;
+    /** 简单档的根节点容忍度：允许在最优着法 0.6 兵以内随机，制造不确定性。 */
+    private static final int EASY_ROOT_MARGIN = 60;
 
     private final SearchEngine searchEngine = new SearchEngine();
-    private final Random random = new Random();
 
     private Difficulty difficulty = Difficulty.MEDIUM;
     private UciEngine uciEngine;
@@ -86,9 +85,7 @@ public final class AiPlayer {
         boolean side = work.isRedTurn();
         SearchResult result;
 
-        if (difficulty == Difficulty.EASY) {
-            result = easyMove(work, side);
-        } else if (difficulty == Difficulty.HARD && externalEngineAvailable()) {
+        if (difficulty == Difficulty.HARD && externalEngineAvailable()) {
             result = externalMove(work);
             if (result == null) {
                 result = internalMove(work);
@@ -113,36 +110,6 @@ public final class AiPlayer {
 
     // ==================== 三档实现 ====================
 
-    /**
-     * 简单档：对每个合法着法做一次静态评估，加入随机扰动后在接近最优的着法里随机挑。
-     * 会吃白送的子，但看不到对方的回吃，像一个刚学会规则的新手。
-     */
-    private SearchResult easyMove(Board board, boolean side) {
-        List<Move> legal = board.legalMoves();
-        if (legal.isEmpty()) {
-            return SearchResult.empty();
-        }
-        double[] scores = new double[legal.size()];
-        double best = -Double.MAX_VALUE;
-        for (int i = 0; i < legal.size(); i++) {
-            Move move = legal.get(i);
-            Board.MoveRecord record = board.apply(move.from(), move.to());
-            int value = Evaluation.evaluate(board, side);
-            board.revert(record);
-            scores[i] = value + random.nextDouble() * 140 - 70;
-            best = Math.max(best, scores[i]);
-        }
-        List<Integer> pool = new ArrayList<>();
-        for (int i = 0; i < scores.length; i++) {
-            if (scores[i] >= best - 140) {
-                pool.add(i);
-            }
-        }
-        lastInfo = "随机应手";
-        lastResult = new SearchResult(legal.get(pool.get(random.nextInt(pool.size()))), (int) best, 1, legal.size());
-        return lastResult;
-    }
-
     private SearchResult internalMove(Board board) {
         SearchResult result = searchEngine.search(board, limits());
         lastInfo = "内置引擎 d" + result.depth();
@@ -166,7 +133,8 @@ public final class AiPlayer {
 
     private SearchLimits limits() {
         long time = timeOverrideMs > 0 ? timeOverrideMs : difficulty.timeMs();
-        return new SearchLimits(difficulty.maxDepth(), time);
+        int margin = difficulty == Difficulty.EASY ? EASY_ROOT_MARGIN : 0;
+        return new SearchLimits(difficulty.maxDepth(), time, margin);
     }
 
     // ==================== 兜底 ====================

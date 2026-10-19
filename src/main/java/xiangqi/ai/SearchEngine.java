@@ -61,6 +61,9 @@ public final class SearchEngine implements Engine {
     private long deadlineNanos;
     private long nodes;
     private boolean stopped;
+    /** 根节点容忍度：>0 时在「与最优着法差距不超过该值」的着法里随机挑，用于低难度档。 */
+    private int rootMargin;
+    private final java.util.Random random = new java.util.Random();
     /** 外部中止信号：界面切局/悔棋时立刻放弃当前搜索。 */
     private volatile boolean aborted;
 
@@ -81,6 +84,7 @@ public final class SearchEngine implements Engine {
         this.nodes = 0;
         this.stopped = false;
         this.aborted = false;
+        this.rootMargin = Math.max(0, limits.rootMargin());
         this.deadlineNanos = System.nanoTime() + Math.max(30, limits.timeMs()) * 1_000_000L;
         clearHeuristics();
         seedPath();
@@ -137,6 +141,10 @@ public final class SearchEngine implements Engine {
         int[] buf = moveBuffers[0];
         orderMoves(buf, n, 0, ttProbeMove(board.key()));
 
+        if (rootMargin > 0) {
+            return rootSearchWithMargin(depth, buf, n, bestOut);
+        }
+
         int bestScore = -INF;
         int bestMove = 0;
         for (int i = 0; i < n; i++) {
@@ -168,6 +176,55 @@ public final class SearchEngine implements Engine {
         }
         if (bestMove != 0) {
             bestOut[0] = bestMove;
+        }
+        return bestScore;
+    }
+
+    /**
+     * 低难度档专用根搜索：对每个根着法做一次全窗口搜索拿到真实分数，
+     * 然后在「不差于最优 {@code rootMargin} 厘兵」的着法里随机挑一手。
+     *
+     * <p>这样既有随机性（不会被玩家摸清固定套路），又不会走出白送车的着法——
+     * 白送一个大子会让分数掉 400 以上，直接落在容忍度之外。</p>
+     */
+    private int rootSearchWithMargin(int depth, int[] buf, int n, int[] bestOut) {
+        if (n == 0) {
+            return -INF;
+        }
+        int[] scores = new int[n];
+        int bestScore = -INF;
+        for (int i = 0; i < n; i++) {
+            int move = buf[i];
+            Board.MoveRecord record = board.apply(Board.moveFrom(move), Board.moveTo(move));
+            int score = -pvs(depth - 1, -INF, INF, 1, true);
+            board.revert(record);
+            if (stopped) {
+                return 0;
+            }
+            scores[i] = score;
+            if (score > bestScore) {
+                bestScore = score;
+            }
+        }
+
+        int candidates = 0;
+        for (int i = 0; i < n; i++) {
+            if (scores[i] >= bestScore - rootMargin) {
+                candidates++;
+            }
+        }
+        if (candidates == 0) {
+            return bestScore;
+        }
+        int pick = random.nextInt(candidates);
+        for (int i = 0; i < n; i++) {
+            if (scores[i] >= bestScore - rootMargin) {
+                if (pick == 0) {
+                    bestOut[0] = buf[i];
+                    return scores[i];
+                }
+                pick--;
+            }
         }
         return bestScore;
     }

@@ -164,9 +164,12 @@ public final class RecordPanel extends JPanel {
 
             redClock.setText("红 " + GameSession.formatClock(session.redMillis()));
             blackClock.setText("黑 " + GameSession.formatClock(session.blackMillis()));
-            boolean redActive = session.displayBoard().isRedTurn() && !session.isOver();
-            redClock.setBackground(redActive ? theme.accentSoft : theme.recordBg);
-            blackClock.setBackground(!redActive && !session.isOver() ? theme.accentSoft : theme.recordBg);
+            boolean live = !session.isOver();
+            boolean redActive = live && session.displayBoard().isRedTurn();
+            // 用不透明混色做「该谁走」的底色：半透明色在部分 LAF 上会被画成黑块
+            Color activeBg = Ui.tint(theme.recordBg, theme.accent, 0.34f);
+            redClock.setBackground(redActive ? activeBg : theme.recordBg);
+            blackClock.setBackground(live && !redActive ? activeBg : theme.recordBg);
 
             Board board = session.displayBoard();
             redCaptured.setText(capturedText(board, true));
@@ -206,7 +209,7 @@ public final class RecordPanel extends JPanel {
 
         table.setBackground(theme.recordBg);
         table.setForeground(theme.panelText);
-        table.setSelectionBackground(theme.accentSoft);
+        table.setSelectionBackground(Ui.tint(theme.recordBg, theme.accent, 0.2f));
         table.setSelectionForeground(theme.panelText);
         table.getTableHeader().setBackground(theme.buttonBg);
         table.getTableHeader().setForeground(theme.buttonText);
@@ -238,7 +241,7 @@ public final class RecordPanel extends JPanel {
             setBorder(new EmptyBorder(0, 6, 0, 6));
             setHorizontalAlignment(column == 0 ? SwingConstants.RIGHT : SwingConstants.LEFT);
             if (selected) {
-                setBackground(theme.accentSoft);
+                setBackground(Ui.tint(theme.recordBg, theme.accent, 0.2f));
                 setForeground(theme.panelText);
             } else {
                 setBackground(row % 2 == 0 ? theme.recordBg : theme.recordAlt);

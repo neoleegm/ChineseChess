@@ -24,6 +24,7 @@ final class EngineTest {
         Checks.test("各档位都返回合法着法", EngineTest::allDifficultiesLegal);
         Checks.test("遵守思考时间上限", EngineTest::respectsTimeLimit);
         Checks.test("避免立即长将作负", EngineTest::avoidsPerpetualLoss);
+        Checks.test("简单档不会把车留在卒口", EngineTest::easyDoesNotHangPieces);
         Checks.test("自对弈 30 手全部合法", EngineTest::selfPlayLegal);
     }
 
@@ -128,6 +129,30 @@ final class EngineTest {
                             && move.toRow() == 5 && move.toCol() == 4,
                     difficulty.label() + " 不应走出立即判负的长将");
         }
+    }
+
+    /**
+     * 简单档的底线：可以算得浅、可以走闲棋，但不能把大子白送。
+     * 旧实现只做一步静态评估，看不到对方回吃，经常主动送车。
+     */
+    private static void easyDoesNotHangPieces() {
+        Board board = empty();
+        board.place(Piece.Type.KING, true, 9, 4);
+        board.place(Piece.Type.KING, false, 0, 3);
+        board.place(Piece.Type.ROOK, true, 5, 4);
+        board.place(Piece.Type.PAWN, false, 4, 4); // 过河卒正威胁吃车
+
+        AiPlayer player = new AiPlayer();
+        player.setDifficulty(Difficulty.EASY);
+        player.setTimeOverride(400);
+
+        Move move = player.chooseMove(board);
+        Checks.notNull(move, "简单档应返回着法");
+        Checks.isTrue(board.play(move), "简单档着法应可执行");
+        boolean stillHanging = board.pieceAt(5, 4) != null
+                && board.pieceAt(5, 4).type() == Piece.Type.ROOK
+                && board.pieceAt(4, 4) != null;
+        Checks.isFalse(stillHanging, "简单档不应把车留在卒口，实际走了 " + move);
     }
 
     private static void selfPlayLegal() {

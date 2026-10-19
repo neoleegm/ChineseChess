@@ -65,6 +65,7 @@ public final class Snapshot {
         play(session, "b9c7");   // 马2进3
         play(session, "b2b6");   // 炮八进四
         play(session, "a9a8");   // 车1进1
+        play(session, "g3g4");   // 兵七进一（走成黑方回合，便于检查「该谁走」的底色）
 
         SidebarPanel sidebar = new SidebarPanel(new NoopActions(), theme);
         RecordPanel record = new RecordPanel(ply -> {
@@ -78,7 +79,7 @@ public final class Snapshot {
         record.update(session);
         sidebar.refresh(session, false, "");
 
-        JLabel status = new JLabel("轮到你走棋 · 红方");
+        JLabel status = new JLabel("AI 思考中…");
         status.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 13));
         status.setForeground(theme.panelText);
         JLabel engine = new JLabel("内置引擎 d8 +0.28");
@@ -109,9 +110,6 @@ public final class Snapshot {
         holder.pack();
         content.setSize(width, height);
         layoutTree(content);
-        System.out.println("board view " + board.getWidth() + "x" + board.getHeight()
-                + " cell=" + board.cellSize());
-        dump(sidebar, "");
 
         BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
         Graphics2D g2 = image.createGraphics();
@@ -125,17 +123,6 @@ public final class Snapshot {
             Files.createDirectories(output.getParent());
         }
         ImageIO.write(image, "png", new File(output.toString()));
-    }
-
-    private static void dump(java.awt.Container container, String indent) {
-        for (java.awt.Component child : container.getComponents()) {
-            System.out.println(indent + child.getClass().getSimpleName() + " "
-                    + child.getWidth() + "x" + child.getHeight()
-                    + (child instanceof javax.swing.AbstractButton b ? " '" + b.getText() + "'" : ""));
-            if (child instanceof java.awt.Container nested && indent.length() < 4) {
-                dump(nested, indent + "  ");
-            }
-        }
     }
 
     /** 未显示的窗口不会自动完成布局，这里手动递归 doLayout。 */

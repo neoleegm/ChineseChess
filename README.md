@@ -102,7 +102,7 @@ ChineseChess/
 │   │             SidebarPanel RecordPanel
 │   │             Theme SegmentedControl Ui Dialogs AiWorker
 │   └── audio/    SoundBank.java           音效合成与缓存
-├── src/test/java/xiangqi/test/            34 个自动化用例（规则/引擎/会话/渲染）
+├── src/test/java/xiangqi/test/            36 个自动化用例（规则/引擎/会话/渲染）
 ├── docs/                                  截图与审视报告
 ├── build.sh  run.sh  test.sh              零依赖构建脚本
 └── .github/workflows/ci.yml               GitHub Actions
@@ -132,7 +132,7 @@ ChineseChess/
 
 | 难度 | 策略 | 时间预算 |
 |---|---|---|
-| 简单 | 一步静态评估 + 随机扰动，会吃白送的子但看不到回吃 | 即时 |
+| 简单 | 两层搜索 + 静态搜索，在最优着法 0.6 兵以内随机挑一手（会吃子、不白送，看不到三步以上的战术） | 0.6 s |
 | 中等 | 完整 alpha-beta + 静态搜索，深度上限 6 | 1.2 s |
 | 困难 | 迭代加深，深度上限 64；配置了 Pikafish 则交给它 | 8 s |
 
@@ -158,9 +158,10 @@ ChineseChess/
 ```
 
 ```
-[规则与走法]  18 项：FEN、UCI、perft、七种棋子走法、牵制、照面、将死、困毙、
-              三次重复、长将、悔棋还原、克隆隔离、记谱、攻击判定
-[AI 引擎]      6 项：吃白送车、一步杀、三档合法性、时间上限、长将自保、自对弈
+[规则与走法]  19 项：FEN 序列化与解析、UCI、perft、七种棋子走法、牵制、照面、
+              将死、困毙、三次重复、长将、悔棋还原、克隆隔离、记谱、攻击判定
+[AI 引擎]      7 项：吃白送车、一步杀、三档合法性、时间上限、长将自保、
+              简单档不白送子、自对弈
 [对局会话]    7 项：悔棋成对、重做对称、复盘、认输、棋谱往返、计时、AI 回合
 [界面渲染]    3 项：三套主题绘制、翻转生效、历史局面绘制
 ```
@@ -201,8 +202,9 @@ java -cp build/classes:build/test-classes xiangqi.test.Snapshot docs/screenshot.
 - **正确性**：修正黑方将/士/象 PST 恒为 0 的评估偏差；静态搜索被将时改为搜索全部应将
 - **新功能**：翻转棋盘、拖拽走子、窗口自适应、重做、认输、求和、双方用时、
   棋谱保存/载入/导出、点击复盘、三套主题、引擎深度与评分显示
-- **工程化**：`build.sh / run.sh / test.sh`、GitHub Actions CI、34 个自动化用例（含 perft）
+- **工程化**：`build.sh / run.sh / test.sh`、GitHub Actions CI、36 个自动化用例（含 perft）
 - 音效改为预渲染 Clip，消除落子音效延迟
+- 简单档从「一步静态评估」升级为「两层搜索 + 根节点随机」，不再白送子
 
 ### v3.2 及更早
 见 `git log`。
@@ -217,7 +219,7 @@ and a built-in alpha-beta engine that can also delegate to Pikafish via UCI.
 
 ```bash
 ./build.sh && ./run.sh    # requires JDK 17+
-./test.sh                 # 34 automated checks, including perft
+./test.sh                 # 36 automated checks, including perft
 ```
 
 Move by clicking or dragging. Click any row in the move list to replay that position.

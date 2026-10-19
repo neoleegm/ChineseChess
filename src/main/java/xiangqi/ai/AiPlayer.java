@@ -68,6 +68,13 @@ public final class AiPlayer {
         return lastResult;
     }
 
+    /** 预启动外部引擎进程，避免第一次提示时把握手时间算进等待。 */
+    public void warmUp() {
+        if (uciEngine != null) {
+            uciEngine.warmUp();
+        }
+    }
+
     /** 中止正在进行的搜索（下次 {@link #chooseMove} 会重新开始）。 */
     public void abort() {
         searchEngine.abort();
@@ -112,7 +119,7 @@ public final class AiPlayer {
 
     private SearchResult internalMove(Board board) {
         SearchResult result = searchEngine.search(board, limits());
-        lastInfo = "内置引擎 d" + result.depth();
+        lastInfo = "内置引擎";
         lastResult = result;
         return result;
     }
@@ -121,7 +128,7 @@ public final class AiPlayer {
         try {
             SearchResult result = uciEngine.search(board, limits());
             uciFailures = 0;
-            lastInfo = "Pikafish d" + result.depth();
+            lastInfo = "Pikafish";
             lastResult = result;
             return result;
         } catch (Exception e) {

@@ -3,6 +3,7 @@ package xiangqi.ui;
 import xiangqi.ai.AiPlayer;
 import xiangqi.ai.Difficulty;
 import xiangqi.ai.Evaluation;
+import xiangqi.ai.SearchResult;
 import xiangqi.audio.SoundBank;
 import xiangqi.core.Board;
 import xiangqi.core.GameResult;
@@ -79,6 +80,8 @@ public final class MainFrame extends JFrame implements SidebarPanel.Actions {
     private Move hintMove;
     private boolean resultHandled;
     private String engineSummary = "内置引擎";
+    /** 提示结果文案；非空时状态栏优先显示它，直到玩家落子。 */
+    private String hintText = "";
 
     public MainFrame() {
         super("中国象棋");
@@ -130,6 +133,15 @@ public final class MainFrame extends JFrame implements SidebarPanel.Actions {
         refresh();
         maybeStartAiTurn();
         SwingUtilities.invokeLater(sounds::warmUp);
+
+        // 后台预热外部引擎：握手 + 加载神经网络约需数百毫秒，
+        // 放在启动时做掉，第一次按「提示」就不用等
+        Thread warmUp = new Thread(() -> {
+            aiPlayer.warmUp();
+            hintPlayer.warmUp();
+        }, "engine-warmup");
+        warmUp.setDaemon(true);
+        warmUp.start();
     }
 
     // ==================== 菜单 ====================
@@ -239,6 +251,10 @@ public final class MainFrame extends JFrame implements SidebarPanel.Actions {
             statusLabel.setText("提示计算中…");
             return;
         }
+        if (!hintText.isEmpty() && session.isPlayerTurn()) {
+            statusLabel.setText(hintText);
+            return;
+        }
         boolean red = session.board().isRedTurn();
         boolean check = session.board().inCheck(red);
         String side = red ? "红方" : "黑方";
@@ -261,6 +277,7 @@ public final class MainFrame extends JFrame implements SidebarPanel.Actions {
         }
         boolean capture = session.board().pieceAt(move.to()) != null;
         hintMove = null;
+        hintText = "";
         if (!session.play(move)) {
             return;
         }
@@ -277,6 +294,7 @@ public final class MainFrame extends JFrame implements SidebarPanel.Actions {
         }
         aiThinking = true;
         hintMove = null;
+        hintText = "";
         refresh();
 
         Board snapshot = session.board().copy();
@@ -295,7 +313,7 @@ public final class MainFrame extends JFrame implements SidebarPanel.Actions {
             if (!session.isOver() && session.board().inCheck(session.board().isRedTurn())) {
                 sounds.play(SoundBank.Effect.CHECK);
             }
-            engineSummary = aiPlayer.lastInfo() + " " + aiPlayer.lastResult().scoreText();
+            engineSummary = aiPlayer.lastInfo() + " " + aiPlayer.lastResult().summary();
             refresh();
         }, error -> {
             aiThinking = false;
@@ -350,6 +368,7 @@ public final class MainFrame extends JFrame implements SidebarPanel.Actions {
         cancelThinking();
         resultHandled = false;
         hintMove = null;
+        hintText = "";
         engineSummary = "内置引擎";
         session.newGame();
         refresh();
@@ -363,6 +382,7 @@ public final class MainFrame extends JFrame implements SidebarPanel.Actions {
         }
         cancelThinking();
         hintMove = null;
+        hintText = "";
         resultHandled = false;
         session.undo();
         refresh();
@@ -376,6 +396,7 @@ public final class MainFrame extends JFrame implements SidebarPanel.Actions {
         }
         cancelThinking();
         hintMove = null;
+        hintText = "";
         session.redo();
         refresh();
         maybeStartAiTurn();
@@ -435,25 +456,57 @@ public final class MainFrame extends JFrame implements SidebarPanel.Actions {
         }
         hintThinking = true;
         hintMove = null;
+        hintText = "";
         refresh();
 
         Board snapshot = session.board().copy();
         hintWorker.request(snapshot, move -> {
             hintThinking = false;
+            SearchResult info = hintPlayer.lastResult();
             if (move != null) {
                 hintMove = move;
-                statusLabel.setText("提示：" + Notation.chinese(session.board(), move)
-                        + "（" + hintPlayer.lastResult().scoreText() + "）");
+                hintText = describeHint(session.board(), move, info);
+                engineSummary = hintPlayer.lastInfo() + " " + info.summary();
             }
             refresh();
-            if (hintMove != null) {
-                statusLabel.setText("提示：" + Notation.chinese(session.board(), hintMove)
-                        + "（" + hintPlayer.lastResult().scoreText() + "）");
-            }
         }, error -> {
             hintThinking = false;
+            hintText = "提示计算失败：" + error.getMessage();
             refresh();
         });
+    }
+
+    /** 提示文案：推荐着法 + 引擎主变着的前两手 + 评估。 */
+    private String describeHint(Board board, Move move, SearchResult info) {
+        StringBuilder text = new StringBuilder("提示：").append(Notation.chinese(board, move));
+        String line = pvLine(board, info.pv(), 1, 2);
+        if (!line.isEmpty()) {
+            text.append("　→　").append(line);
+        }
+        text.append("　·　").append(info.summary());
+        return text.toString();
+    }
+
+    /** 把主变着里第 {@code skip} 手起的 {@code count} 手转成中文记谱。 */
+    private String pvLine(Board board, List<Move> pv, int skip, int count) {
+        Board copy = board.copy();
+        StringBuilder text = new StringBuilder();
+        int taken = 0;
+        for (int i = 0; i < pv.size() && taken < count; i++) {
+            Move move = pv.get(i);
+            if (!copy.isLegalMove(move)) {
+                break;
+            }
+            if (i >= skip) {
+                if (taken > 0) {
+                    text.append(' ');
+                }
+                text.append(Notation.chinese(copy, move));
+                taken++;
+            }
+            copy.play(move);
+        }
+        return text.toString();
     }
 
     @Override

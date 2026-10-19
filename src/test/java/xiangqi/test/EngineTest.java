@@ -5,6 +5,7 @@ import xiangqi.ai.Difficulty;
 import xiangqi.ai.SearchEngine;
 import xiangqi.ai.SearchLimits;
 import xiangqi.ai.SearchResult;
+import xiangqi.ai.UciEngine;
 import xiangqi.core.Board;
 import xiangqi.core.Move;
 import xiangqi.core.Piece;
@@ -25,6 +26,7 @@ final class EngineTest {
         Checks.test("遵守思考时间上限", EngineTest::respectsTimeLimit);
         Checks.test("避免立即长将作负", EngineTest::avoidsPerpetualLoss);
         Checks.test("简单档不会把车留在卒口", EngineTest::easyDoesNotHangPieces);
+        Checks.test("UCI 局面命令不重复叠加历史", EngineTest::uciPositionCommand);
         Checks.test("自对弈 30 手全部合法", EngineTest::selfPlayLegal);
     }
 
@@ -153,6 +155,30 @@ final class EngineTest {
                 && board.pieceAt(5, 4).type() == Piece.Type.ROOK
                 && board.pieceAt(4, 4) != null;
         Checks.isFalse(stillHanging, "简单档不应把车留在卒口，实际走了 " + move);
+    }
+
+    /**
+     * 回归用例：{@code position fen X moves ...} 会从 X 再走一遍 moves，
+     * 若 X 已是走完之后的局面就会把历史叠加两次。有完整历史时必须用 startpos。
+     */
+    private static void uciPositionCommand() {
+        Board fresh = new Board();
+        Checks.isTrue(UciEngine.positionCommand(fresh).startsWith("position fen "),
+                "无历史时用 fen");
+
+        Board played = new Board();
+        played.play(new Move(7, 1, 7, 4));
+        Checks.equal("position startpos moves b2e2", UciEngine.positionCommand(played),
+                "一手历史");
+        played.play(new Move(0, 1, 2, 2));
+        Checks.equal("position startpos moves b2e2 b9c7", UciEngine.positionCommand(played),
+                "两手历史");
+
+        Board placed = empty();
+        placed.place(Piece.Type.KING, true, 9, 4);
+        placed.place(Piece.Type.KING, false, 0, 3);
+        Checks.isTrue(UciEngine.positionCommand(placed).startsWith("position fen "),
+                "摆出来的局面没有历史，用 fen");
     }
 
     private static void selfPlayLegal() {

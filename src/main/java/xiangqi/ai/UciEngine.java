@@ -29,6 +29,9 @@ public final class UciEngine implements Engine {
 
     private static final long HANDSHAKE_TIMEOUT_MS = 8_000;
     private static final long READY_TIMEOUT_MS = 8_000;
+    /** 搜索线程数上限。2.5 秒的提示预算下，4 线程已能比单线程多算数倍节点。 */
+    private static final int MAX_THREADS = 4;
+    private static final int HASH_MB = 128;
 
     private final String enginePath;
     private Process process;
@@ -41,6 +44,7 @@ public final class UciEngine implements Engine {
     private volatile String lastInfo = "";
     private volatile int lastDepth;
     private volatile int lastScore;
+    private volatile List<Move> lastPv = List.of();
 
     public UciEngine(String enginePath) {
         this.enginePath = enginePath;
@@ -68,19 +72,12 @@ public final class UciEngine implements Engine {
         }
 
         long timeMs = Math.max(200, limits.timeMs());
-        StringBuilder position = new StringBuilder("position fen ").append(Fen.toFen(board));
-        List<Move> history = board.historyMoves();
-        if (!history.isEmpty()) {
-            position.append(" moves");
-            for (Move move : history) {
-                position.append(' ').append(Uci.toUci(move));
-            }
-        }
         lastDepth = 0;
         lastScore = 0;
+        lastPv = List.of();
 
         try {
-            send(position.toString());
+            send(positionCommand(board));
             send("go movetime " + timeMs);
             String best = waitFor("bestmove", timeMs + 5_000);
             Move move = parseBestMove(best);
@@ -88,11 +85,43 @@ public final class UciEngine implements Engine {
                 resetAfterFailure();
                 throw new IllegalStateException("无法解析 bestmove: " + best);
             }
-            return new SearchResult(move, lastScore, lastDepth, 0);
+            return new SearchResult(move, lastScore, lastDepth, 0, lastPv);
         } catch (Exception e) {
             resetAfterFailure();
             throw e instanceof RuntimeException runtime ? runtime
                     : new IllegalStateException(e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 构造 UCI 的 position 命令。
+     *
+     * <p>关键点：{@code position fen X moves ...} 会从 X 开始<em>再走一遍</em> moves。
+     * 如果 X 已经是走完这些着法之后的局面，就等于把历史叠加了两次，引擎会分析到
+     * 一个错误局面（大多数情况因为首着不合法而被忽略，但局面一旦回到起点就会真的错）。
+     * 因此这里优先用 {@code position startpos moves ...}，只有在棋盘不是从标准初始
+     * 局面摆出来的时候才退回 {@code position fen}。</p>
+     */
+    public static String positionCommand(Board board) {
+        List<Move> history = board.historyMoves();
+        if (!history.isEmpty() && board.startsFromInitialPosition()) {
+            StringBuilder command = new StringBuilder("position startpos moves");
+            for (Move move : history) {
+                command.append(' ').append(Uci.toUci(move));
+            }
+            return command.toString();
+        }
+        return "position fen " + Fen.toFen(board);
+    }
+
+    /** 预启动引擎进程并完成握手，避免第一次提示时把 1 秒握手算进等待时间。 */
+    public void warmUp() {
+        try {
+            synchronized (this) {
+                ensureRunning();
+            }
+        } catch (Exception ignored) {
+            // 预热失败不影响后续调用：真正搜索时会再次尝试并给出明确错误
         }
     }
 
@@ -134,8 +163,9 @@ public final class UciEngine implements Engine {
 
         send("uci");
         waitFor("uciok", HANDSHAKE_TIMEOUT_MS);
-        send("setoption name Threads value 1");
-        send("setoption name Hash value 128");
+        int threads = Math.max(1, Math.min(MAX_THREADS, Runtime.getRuntime().availableProcessors()));
+        send("setoption name Threads value " + threads);
+        send("setoption name Hash value " + HASH_MB);
         send("isready");
         waitFor("readyok", READY_TIMEOUT_MS);
         send("ucinewgame");
@@ -174,11 +204,24 @@ public final class UciEngine implements Engine {
                                 : -SearchResult.MATE_SCORE - mateIn;
                     }
                 }
+                case "pv" -> lastPv = parsePv(parts, i + 1);
                 default -> {
                 }
             }
         }
         lastInfo = line;
+    }
+
+    private static List<Move> parsePv(String[] parts, int from) {
+        List<Move> pv = new java.util.ArrayList<>();
+        for (int i = from; i < parts.length; i++) {
+            Move move = Uci.fromUci(parts[i]);
+            if (move == null) {
+                break;
+            }
+            pv.add(move);
+        }
+        return pv;
     }
 
     private static int parseInt(String text, int fallback) {

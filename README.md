@@ -22,7 +22,8 @@ game record save & load, move-by-move replay, and three board themes.
 - **悔棋 / 重做**：人机模式下一次退/进双方各一步
 - **认输 / 求和**：人机模式下 AI 会按子力差决定是否接受和棋
 - **双方用时**统计，落子即刷新
-- 高手提示：独立困难档引擎给出推荐着法，蓝色箭头标注并显示评估分
+- **大师级提示**：独立引擎（优先 Pikafish，4 线程）给出推荐着法，蓝色箭头标注，
+  同时显示引擎主变着的后续两三手、评估分与搜索深度（约 2.5 秒返回）
 
 ### 棋谱
 - 保存 / 载入 `.xq` 棋谱（PGN 风格头 + 中文记谱 + 大括号内 UCI 坐标，人能读、程序能回放）
@@ -102,7 +103,7 @@ ChineseChess/
 │   │             SidebarPanel RecordPanel
 │   │             Theme SegmentedControl Ui Dialogs AiWorker
 │   └── audio/    SoundBank.java           音效合成与缓存
-├── src/test/java/xiangqi/test/            36 个自动化用例（规则/引擎/会话/渲染）
+├── src/test/java/xiangqi/test/            37 个自动化用例（规则/引擎/会话/渲染）
 ├── docs/                                  截图与审视报告
 ├── build.sh  run.sh  test.sh              零依赖构建脚本
 └── .github/workflows/ci.yml               GitHub Actions
@@ -160,8 +161,8 @@ ChineseChess/
 ```
 [规则与走法]  19 项：FEN 序列化与解析、UCI、perft、七种棋子走法、牵制、照面、
               将死、困毙、三次重复、长将、悔棋还原、克隆隔离、记谱、攻击判定
-[AI 引擎]      7 项：吃白送车、一步杀、三档合法性、时间上限、长将自保、
-              简单档不白送子、自对弈
+[AI 引擎]      8 项：吃白送车、一步杀、三档合法性、时间上限、长将自保、
+              简单档不白送子、UCI 局面命令、自对弈
 [对局会话]    7 项：悔棋成对、重做对称、复盘、认输、棋谱往返、计时、AI 回合
 [界面渲染]    3 项：三套主题绘制、翻转生效、历史局面绘制
 ```
@@ -189,6 +190,10 @@ java -cp build/classes:build/test-classes xiangqi.test.Snapshot docs/screenshot.
 2. 侧边栏点「选择 Pikafish…」，选中可执行文件。
 3. 路径保存在 Java Preferences 中；启动失败或连续返回非法着法时会自动回退内置引擎。
 
+引擎以 4 线程 / 128 MB 置换表启动，并在程序启动时后台预热（握手 + 加载神经网络），
+所以第一次按「提示」不会额外等待。提示会带上引擎给出的主变着（PV）与评估：
+`提示：炮二平五 → 马8进7 马二进三 · d24 +0.35`。
+
 > `pikafish.nnue` 约 53 MB，已被 `.gitignore` 排除，需自行从官方发布包获取。
 
 ---
@@ -202,7 +207,7 @@ java -cp build/classes:build/test-classes xiangqi.test.Snapshot docs/screenshot.
 - **正确性**：修正黑方将/士/象 PST 恒为 0 的评估偏差；静态搜索被将时改为搜索全部应将
 - **新功能**：翻转棋盘、拖拽走子、窗口自适应、重做、认输、求和、双方用时、
   棋谱保存/载入/导出、点击复盘、三套主题、引擎深度与评分显示
-- **工程化**：`build.sh / run.sh / test.sh`、GitHub Actions CI、36 个自动化用例（含 perft）
+- **工程化**：`build.sh / run.sh / test.sh`、GitHub Actions CI、37 个自动化用例（含 perft）
 - 音效改为预渲染 Clip，消除落子音效延迟
 - 简单档从「一步静态评估」升级为「两层搜索 + 根节点随机」，不再白送子
 
@@ -219,7 +224,7 @@ and a built-in alpha-beta engine that can also delegate to Pikafish via UCI.
 
 ```bash
 ./build.sh && ./run.sh    # requires JDK 17+
-./test.sh                 # 36 automated checks, including perft
+./test.sh                 # 37 automated checks, including perft
 ```
 
 Move by clicking or dragging. Click any row in the move list to replay that position.

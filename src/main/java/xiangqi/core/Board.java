@@ -78,6 +78,8 @@ public final class Board implements Cloneable {
 
     private final int[] kingSquare = {-1, -1};
     private boolean redTurn = true;
+    /** 是否由标准初始局面走来。外部引擎据此决定用 startpos 还是 fen 描述局面。 */
+    private boolean fromInitialPosition = true;
     private long key;
     private RepetitionOutcome repetitionOutcome = RepetitionOutcome.NONE;
 
@@ -112,6 +114,7 @@ public final class Board implements Cloneable {
         repetitions.putAll(other.repetitions);
         System.arraycopy(other.kingSquare, 0, kingSquare, 0, 2);
         redTurn = other.redTurn;
+        fromInitialPosition = other.fromInitialPosition;
         key = other.key;
         repetitionOutcome = other.repetitionOutcome;
     }
@@ -847,6 +850,7 @@ public final class Board implements Cloneable {
         kingSquare[RED_INDEX] = -1;
         kingSquare[BLACK_INDEX] = -1;
         redTurn = true;
+        fromInitialPosition = true;
         key = 0;
         repetitionOutcome = RepetitionOutcome.NONE;
         setupInitialPosition();
@@ -919,10 +923,16 @@ public final class Board implements Cloneable {
         kingSquare[RED_INDEX] = -1;
         kingSquare[BLACK_INDEX] = -1;
         redTurn = true;
+        fromInitialPosition = false;
         key = 0;
         repetitionOutcome = RepetitionOutcome.NONE;
         positionKeys.add(0L);
         repetitions.put(0L, 1);
+    }
+
+    /** 历史是否从标准初始局面开始（决定能否用 UCI 的 {@code startpos moves}）。 */
+    public boolean startsFromInitialPosition() {
+        return fromInitialPosition;
     }
 
     /** 在空棋盘上摆一个棋子（不做规则校验）。 */

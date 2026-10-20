@@ -4,6 +4,9 @@ import xiangqi.ai.Difficulty;
 import xiangqi.core.Board;
 import xiangqi.core.GameResult;
 import xiangqi.core.Move;
+import xiangqi.core.Piece;
+import xiangqi.core.Uci;
+import xiangqi.game.DrawPolicy;
 import xiangqi.game.GameRecord;
 import xiangqi.game.GameSession;
 
@@ -26,6 +29,12 @@ final class SessionTest {
         Checks.test("认输判定胜负", SessionTest::resign);
         Checks.test("棋谱保存与载入往返", SessionTest::recordRoundTrip);
         Checks.test("用时统计", SessionTest::clock);
+        Checks.test("实时用时随回合推进", SessionTest::liveClock);
+        Checks.test("AI 只在自身不占优时接受和棋", SessionTest::drawPolicy);
+        Checks.test("认输后不能再悔棋", SessionTest::cannotUndoResignation);
+        Checks.test("载入终局棋谱保留结果", SessionTest::loadFinishedRecord);
+        Checks.test("AI 落子不打断复盘", SessionTest::aiMoveKeepsReview);
+        Checks.test("载入后可选择从终局继续", SessionTest::resumeFromFinished);
         Checks.test("人机模式下 AI 回合判定", SessionTest::awaitingAi);
     }
 
@@ -152,5 +161,119 @@ final class SessionTest {
 
         session.setMode(GameSession.Mode.PVP);
         Checks.isFalse(session.awaitingAi(), "人人对战不应有 AI 回合");
+    }
+
+    /** 实时时钟：轮到谁，谁的用时就在涨；落子后停住并计入累计。 */
+    private static void liveClock() {
+        long[] nanos = {0};
+        GameSession session = new GameSession(() -> nanos[0]);
+        session.setMode(GameSession.Mode.PVE);
+        session.setPlayerIsRed(true);
+        session.setDifficulty(Difficulty.MEDIUM);
+
+        Checks.equal(0L, session.liveRedMillis(), "开局红方时间为 0");
+        nanos[0] = 5_000_000_000L; // 过了 5 秒
+        Checks.equal(5_000L, session.liveRedMillis(), "红方实时用时");
+        Checks.equal(0L, session.liveBlackMillis(), "黑方还没走，不计时");
+
+        playUci(session, "h2e2");
+        Checks.equal(5_000L, session.redMillis(), "落子后红方累计 5 秒");
+        nanos[0] += 3_000_000_000L;
+        Checks.equal(3_000L, session.liveBlackMillis(), "轮到黑方计时");
+        Checks.equal(5_000L, session.liveRedMillis(), "红方停表");
+
+        session.resign();
+        long frozen = session.liveBlackMillis();
+        nanos[0] += 10_000_000_000L;
+        Checks.equal(frozen, session.liveBlackMillis(), "终局后时钟停住");
+    }
+
+    /** 求和策略：AI 只有在自己不占优时才接受。 */
+    private static void drawPolicy() {
+        Board board = new Board();
+        Checks.isFalse(DrawPolicy.aiAcceptsDraw(board, true, 0, 4), "开局太早应拒绝");
+        Checks.isTrue(DrawPolicy.aiAcceptsDraw(board, true, 0, 30), "均势应接受");
+        Checks.isFalse(DrawPolicy.aiAcceptsDraw(board, true, 200, 30), "AI 领先应拒绝");
+        Checks.isTrue(DrawPolicy.aiAcceptsDraw(board, true, -200, 30), "AI 落后应接受");
+
+        // 没有评分时退回子力差：黑方多一只车，AI 执黑（玩家执红）应拒绝
+        Board blackAhead = new Board();
+        blackAhead.clear();
+        blackAhead.place(Piece.Type.KING, true, 9, 4);
+        blackAhead.place(Piece.Type.KING, false, 0, 3);
+        blackAhead.place(Piece.Type.ROOK, false, 5, 8);
+        Checks.isFalse(DrawPolicy.aiAcceptsDraw(blackAhead, true, null, 30), "AI 多子应拒绝");
+        Checks.isTrue(DrawPolicy.aiAcceptsDraw(blackAhead, false, null, 30), "玩家执黑时 AI 是红方，落后应接受");
+    }
+
+    private static void cannotUndoResignation() {
+        GameSession session = pveSession();
+        playUci(session, "h2e2");
+        playUci(session, "h9g7");
+        Checks.isTrue(session.canUndo(), "正常局面可以悔棋");
+        session.resign();
+        Checks.isFalse(session.canUndo(), "认输后不能再悔棋把对局复活");
+        Checks.isFalse(session.undo(), "悔棋应被拒绝");
+        Checks.isTrue(session.isOver(), "对局仍是结束状态");
+
+        GameSession agreed = pveSession();
+        playUci(agreed, "h2e2");
+        playUci(agreed, "h9g7");
+        agreed.agreeDraw();
+        Checks.isFalse(agreed.canUndo(), "议和后同样不能悔棋");
+    }
+
+    private static void loadFinishedRecord() {
+        try {
+            GameSession session = pveSession();
+            playUci(session, "h2e2");
+            playUci(session, "h9g7");
+            session.resign();
+            String text = GameRecord.render(session);
+            Checks.isTrue(text.contains("[Reason \"RESIGNATION\"]"), "棋谱应记录结束原因");
+
+            Path file = Files.createTempFile("xiangqi-end-", ".xq");
+            try {
+                Files.writeString(file, text, java.nio.charset.StandardCharsets.UTF_8);
+                GameRecord.Data data = GameRecord.load(file);
+                Checks.notNull(data.result(), "应还原结果");
+                Checks.equal(GameResult.Reason.RESIGNATION, data.result().reason(), "原因还原");
+
+                GameSession restored = new GameSession();
+                restored.loadMoves(data.moves(), data.mode(), data.difficulty(),
+                        data.playerIsRed(), data.result());
+                Checks.isTrue(restored.isOver(), "载入后仍是终局");
+                Checks.equal(GameResult.Reason.RESIGNATION, restored.result().reason(), "载入后原因一致");
+                Checks.isFalse(restored.awaitingAi(), "不该再叫 AI 接着走");
+            } finally {
+                Files.deleteIfExists(file);
+            }
+        } catch (Exception e) {
+            throw new RuntimeException(e.getMessage(), e);
+        }
+    }
+
+    private static void aiMoveKeepsReview() {
+        GameSession session = pveSession();
+        playUci(session, "h2e2");
+        playUci(session, "h9g7");
+        playUci(session, "h0g2");
+        session.setReviewPly(1);
+        Checks.isTrue(session.reviewing(), "应处于复盘");
+
+        Checks.isTrue(session.play(Uci.fromUci("b9c7"), true), "AI 应着应成功");
+        Checks.isTrue(session.reviewing(), "复盘状态应保留");
+        Checks.equal(1, session.reviewPly(), "复盘手数不变");
+        Checks.equal(4, session.plyCount(), "着法表仍应更新");
+    }
+
+    private static void resumeFromFinished() {
+        GameSession session = pveSession();
+        playUci(session, "h2e2");
+        playUci(session, "h9g7");
+        session.resign();
+        Checks.isTrue(session.resumePlay(), "认输局面可以继续下");
+        Checks.isFalse(session.isOver(), "结果已清除");
+        Checks.isTrue(session.isPlayerTurn(), "继续后轮到玩家走棋");
     }
 }

@@ -13,8 +13,16 @@ import xiangqi.core.Piece;
  */
 public final class Evaluation {
 
-    /** 索引顺序：将 0、士 1、象 2、马 3、车 4、炮 5、兵 6。 */
-    public static final int[] VALUE = {100_000, 220, 220, 480, 950, 520, 110};
+    /** 索引顺序：将 0、士 1、象 2、马 3、车 4、炮 5、兵 6。取值来自 {@link Piece.Type#value()}。 */
+    public static final int[] VALUE = {
+            Piece.Type.KING.value(),
+            Piece.Type.ADVISOR.value(),
+            Piece.Type.ELEPHANT.value(),
+            Piece.Type.HORSE.value(),
+            Piece.Type.ROOK.value(),
+            Piece.Type.CANNON.value(),
+            Piece.Type.PAWN.value()
+    };
 
     private static final int[][][] PST = new int[7][10][9];
 

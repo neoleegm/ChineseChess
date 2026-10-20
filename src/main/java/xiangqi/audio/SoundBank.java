@@ -18,7 +18,7 @@ import java.util.Map;
 public final class SoundBank {
 
     public enum Effect {
-        SELECT, MOVE, CAPTURE, CHECK, WIN, LOSE
+        SELECT, MOVE, CAPTURE, CHECK, WIN, LOSE, DRAW
     }
 
     private static final int SAMPLE_RATE = 22_050;
@@ -114,6 +114,9 @@ public final class SoundBank {
                     blip(440, 180, 0.26), gap(50),
                     blip(370, 180, 0.26), gap(50),
                     blip(294, 380, 0.26));
+            case DRAW -> concat(
+                    blip(392, 170, 0.24), gap(60),
+                    blip(392, 220, 0.24));
         };
     }
 

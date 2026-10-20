@@ -162,14 +162,7 @@ public final class RecordPanel extends JPanel {
                 table.clearSelection();
             }
 
-            redClock.setText("红 " + GameSession.formatClock(session.redMillis()));
-            blackClock.setText("黑 " + GameSession.formatClock(session.blackMillis()));
-            boolean live = !session.isOver();
-            boolean redActive = live && session.displayBoard().isRedTurn();
-            // 用不透明混色做「该谁走」的底色：半透明色在部分 LAF 上会被画成黑块
-            Color activeBg = Ui.tint(theme.recordBg, theme.accent, 0.34f);
-            redClock.setBackground(redActive ? activeBg : theme.recordBg);
-            blackClock.setBackground(live && !redActive ? activeBg : theme.recordBg);
+            updateClocks(session);
 
             Board board = session.displayBoard();
             redCaptured.setText(capturedText(board, true));
@@ -177,6 +170,21 @@ public final class RecordPanel extends JPanel {
         } finally {
             updating = false;
         }
+    }
+
+    /**
+     * 只刷新两个时钟（含「该谁走」高亮）。主窗口用 500ms 定时器单独驱动它，
+     * 不必为了走秒而重建着法表。
+     */
+    public void updateClocks(GameSession session) {
+        redClock.setText("红 " + GameSession.formatClock(session.liveRedMillis()));
+        blackClock.setText("黑 " + GameSession.formatClock(session.liveBlackMillis()));
+        boolean live = !session.isOver() && !session.reviewing();
+        // 用实时局面判断该谁走：复盘时 displayBoard() 是历史局面，会把高亮画错
+        boolean redActive = live && session.board().isRedTurn();
+        Color activeBg = Ui.tint(theme.recordBg, theme.accent, 0.34f);
+        redClock.setBackground(redActive ? activeBg : theme.recordBg);
+        blackClock.setBackground(live && !redActive ? activeBg : theme.recordBg);
     }
 
     private String capturedText(Board board, boolean red) {

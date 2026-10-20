@@ -31,17 +31,21 @@ final class Dialogs {
             将死对方        对方将帅被攻击且无任何合法应着
             困毙            对方无子可走（未被将军也算负，中国象棋规则）
             长将作负        同一局面第三次出现，且循环中一方每步都在将军
-            三次重复        同一局面第三次出现且不构成长将，判和
+            长捉作负        循环中一方每步都在将军或捉子，另一方不是（一将一捉同样判负）
+            三次重复        同一局面第三次出现且不构成长将 / 长捉，判和
+            自然限着        连续 60 回合（120 个半回合）没有吃子，判和
+            子力不足        双方都没有车、马、炮、兵，只剩将士象，判和
 
             【操作】
             点选棋子后点目标格，或直接按住棋子拖到目标格
             点击右侧着法表中的任意一手，可回看当时局面
+            复盘时：← / → 上一手 / 下一手，Home / End 跳到开局 / 最新，Esc 返回对局
 
             【快捷键】
-            U  悔棋          Y  重做
-            R  重新开始      H  提示（人机对战）
-            F  翻转棋盘      Ctrl+S  保存棋谱
-            Q  退出
+            Ctrl/Cmd+N  重新开始      Ctrl/Cmd+Z  悔棋
+            Ctrl/Cmd+Shift+Z  重做    H  提示（人机对战）
+            F  翻转棋盘               Ctrl/Cmd+S  保存棋谱
+            Ctrl/Cmd+O  载入棋谱      Ctrl/Cmd+Q  退出
             """;
 
     private Dialogs() {
@@ -67,7 +71,7 @@ final class Dialogs {
         JPanel panel = new JPanel(new BorderLayout(0, 8));
         panel.setBackground(theme.panelBg);
 
-        JLabel title = new JLabel("中国象棋 v4.0");
+        JLabel title = new JLabel("中国象棋 v4.1");
         title.setFont(Ui.font(Font.BOLD, 20));
         title.setForeground(theme.panelText);
         panel.add(title, BorderLayout.NORTH);

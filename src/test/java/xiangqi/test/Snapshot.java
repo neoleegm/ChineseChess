@@ -77,9 +77,12 @@ public final class Snapshot {
         board.setShowCoordinates(true);
 
         record.update(session);
-        sidebar.refresh(session, false, "");
+        sidebar.refresh(session, false, "", null);
 
-        JLabel status = new JLabel("AI 思考中…");
+        // 状态栏文案跟真实界面一致，从会话推导，避免截图和程序行为对不上
+        String turn = session.board().isRedTurn() ? "红方" : "黑方";
+        String statusText = session.isPlayerTurn() ? "轮到你走棋 · " + turn : turn + "走棋";
+        JLabel status = new JLabel(statusText);
         status.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 13));
         status.setForeground(theme.panelText);
         JLabel engine = new JLabel("内置引擎 d8 +0.28");

@@ -1,6 +1,7 @@
 package xiangqi.game;
 
 import xiangqi.ai.Difficulty;
+import xiangqi.core.GameResult;
 import xiangqi.core.Move;
 import xiangqi.core.Uci;
 
@@ -31,9 +32,9 @@ public final class GameRecord {
     private GameRecord() {
     }
 
-    /** 载入结果。 */
+    /** 载入结果。{@code result} 为棋谱里记录的结果，没有记录时为 {@code null}。 */
     public record Data(List<Move> moves, GameSession.Mode mode, Difficulty difficulty,
-                       boolean playerIsRed, String resultText) {
+                       boolean playerIsRed, String resultText, GameResult result) {
     }
 
     public static void save(Path path, GameSession session) throws IOException {
@@ -70,6 +71,8 @@ public final class GameRecord {
         out.append("[PlayerSide \"").append(session.playerIsRed() ? "红方" : "黑方").append("\"]\n");
         out.append("[Result \"").append(session.result() == null ? "*" : session.result().score()).append("\"]\n");
         if (session.result() != null) {
+            // 认输 / 议和无法从着法重演，必须把原因写进头里，载入时才能还原
+            out.append("[Reason \"").append(session.result().reason().name()).append("\"]\n");
             out.append("[ResultText \"").append(session.result().text()).append("\"]\n");
         }
         out.append('\n');
@@ -120,6 +123,28 @@ public final class GameRecord {
         GameSession.Mode mode = GameSession.Mode.fromLabel(headers.getOrDefault("Mode", "人机对战"));
         Difficulty difficulty = Difficulty.fromLabel(headers.getOrDefault("Difficulty", "中等"));
         boolean playerIsRed = !"黑方".equals(headers.getOrDefault("PlayerSide", "红方"));
-        return new Data(moves, mode, difficulty, playerIsRed, headers.getOrDefault("ResultText", ""));
+        return new Data(moves, mode, difficulty, playerIsRed,
+                headers.getOrDefault("ResultText", ""), parseResult(headers));
+    }
+
+    /** 从 {@code [Result]} + {@code [Reason]} 还原对局结果；信息不全时返回 {@code null}。 */
+    private static GameResult parseResult(Map<String, String> headers) {
+        String reasonName = headers.get("Reason");
+        String score = headers.getOrDefault("Result", "*");
+        if (reasonName == null || reasonName.isBlank() || "*".equals(score)) {
+            return null;
+        }
+        GameResult.Reason reason;
+        try {
+            reason = GameResult.Reason.valueOf(reasonName.trim());
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+        return switch (score) {
+            case "1-0" -> GameResult.redWins(reason);
+            case "0-1" -> GameResult.blackWins(reason);
+            case "1/2-1/2" -> GameResult.draw(reason);
+            default -> null;
+        };
     }
 }

@@ -20,12 +20,13 @@ public final class AiPlayer {
 
     private final SearchEngine searchEngine = new SearchEngine();
 
-    private Difficulty difficulty = Difficulty.MEDIUM;
-    private UciEngine uciEngine;
-    private int uciFailures;
-    private long timeOverrideMs = -1;
-    private String lastInfo = "内置引擎";
-    private SearchResult lastResult = SearchResult.empty();
+    /** 以下字段会被界面线程写入、AI 线程读取，统一用 volatile 保证可见性。 */
+    private volatile Difficulty difficulty = Difficulty.MEDIUM;
+    private volatile UciEngine uciEngine;
+    private volatile int uciFailures;
+    private volatile long timeOverrideMs = -1;
+    private volatile String lastInfo = "内置引擎";
+    private volatile SearchResult lastResult = SearchResult.empty();
 
     public void setDifficulty(Difficulty difficulty) {
         this.difficulty = difficulty == null ? Difficulty.MEDIUM : difficulty;
@@ -39,24 +40,29 @@ public final class AiPlayer {
         this.timeOverrideMs = millis;
     }
 
-    /** 配置外部引擎路径；空字符串表示不使用。会先销毁旧进程。 */
-    public void setEnginePath(String path) {
-        if (uciEngine != null) {
-            uciEngine.shutdown();
-            uciEngine = null;
-        }
-        uciFailures = 0;
-        if (path != null && !path.isBlank()) {
-            uciEngine = new UciEngine(path);
-        }
+    /**
+     * 绑定外部引擎实例（生命周期由调用方管理）。传 {@code null} 表示不使用。
+     *
+     * <p>人机对局与「提示」共用同一个实例：UCI 搜索本身是串行的，
+     * 两个进程各开 4 线程只会互相抢 CPU。</p>
+     */
+    public void setEngine(UciEngine engine) {
+        this.uciEngine = engine;
+        this.uciFailures = 0;
+    }
+
+    public UciEngine engine() {
+        return uciEngine;
     }
 
     public String enginePath() {
-        return uciEngine == null ? "" : uciEngine.enginePath();
+        UciEngine engine = uciEngine;
+        return engine == null ? "" : engine.enginePath();
     }
 
     public boolean externalEngineAvailable() {
-        return uciEngine != null && uciFailures < UCI_MAX_FAILURES;
+        UciEngine engine = uciEngine;
+        return engine != null && uciFailures < UCI_MAX_FAILURES;
     }
 
     public String lastInfo() {
@@ -70,19 +76,31 @@ public final class AiPlayer {
 
     /** 预启动外部引擎进程，避免第一次提示时把握手时间算进等待。 */
     public void warmUp() {
-        if (uciEngine != null) {
-            uciEngine.warmUp();
+        UciEngine engine = uciEngine;
+        if (engine != null) {
+            engine.warmUp();
         }
     }
 
-    /** 中止正在进行的搜索（下次 {@link #chooseMove} 会重新开始）。 */
+    /**
+     * 中止正在进行的搜索（下次 {@link #chooseMove} 会重新开始）。
+     *
+     * <p>内置引擎靠标志位；外部引擎必须显式发 UCI {@code stop}，
+     * 否则它会一直算到 movetime 结束，悔棋/重开都要干等。</p>
+     */
     public void abort() {
         searchEngine.abort();
+        UciEngine engine = uciEngine;
+        if (engine != null) {
+            engine.stop();
+        }
     }
 
+    /** 关闭外部引擎进程；共享实例时由持有者负责关闭，这里只做兜底。 */
     public void shutdown() {
-        if (uciEngine != null) {
-            uciEngine.shutdown();
+        UciEngine engine = uciEngine;
+        if (engine != null) {
+            engine.shutdown();
         }
     }
 
@@ -92,8 +110,9 @@ public final class AiPlayer {
         boolean side = work.isRedTurn();
         SearchResult result;
 
-        if (difficulty == Difficulty.HARD && externalEngineAvailable()) {
-            result = externalMove(work);
+        UciEngine engine = uciEngine;
+        if (difficulty == Difficulty.HARD && engine != null && externalEngineAvailable()) {
+            result = externalMove(engine, work);
             if (result == null) {
                 result = internalMove(work);
             }
@@ -105,11 +124,11 @@ public final class AiPlayer {
         if (move == null || !isLegalForSide(work, move, side)) {
             move = firstLegal(work, side);
         }
-        if (move != null && losesByPerpetualCheck(work, move)) {
-            Move alternative = pickAvoidingPerpetualLoss(work, side, move);
+        if (move != null && losesByRepetition(work, move)) {
+            Move alternative = pickAvoidingRepetitionLoss(work, side, move);
             if (alternative != null) {
                 move = alternative;
-                lastInfo += "（避开长将）";
+                lastInfo += "（避开长打）";
             }
         }
         return move;
@@ -124,9 +143,9 @@ public final class AiPlayer {
         return result;
     }
 
-    private SearchResult externalMove(Board board) {
+    private SearchResult externalMove(UciEngine engine, Board board) {
         try {
-            SearchResult result = uciEngine.search(board, limits());
+            SearchResult result = engine.search(board, limits());
             uciFailures = 0;
             lastInfo = "Pikafish";
             lastResult = result;
@@ -159,8 +178,8 @@ public final class AiPlayer {
         return legal.isEmpty() ? null : legal.get(0);
     }
 
-    /** 试走该着是否会立即触发己方长将作负。 */
-    private boolean losesByPerpetualCheck(Board board, Move move) {
+    /** 试走该着是否会立即触发己方长将 / 长捉作负。 */
+    private boolean losesByRepetition(Board board, Move move) {
         Board probe = board.copy();
         if (!probe.play(move)) {
             return false;
@@ -171,9 +190,9 @@ public final class AiPlayer {
                 : outcome == Board.RepetitionOutcome.BLACK_LOSES;
     }
 
-    private Move pickAvoidingPerpetualLoss(Board board, boolean side, Move fallback) {
+    private Move pickAvoidingRepetitionLoss(Board board, boolean side, Move fallback) {
         for (Move move : board.legalMoves(side)) {
-            if (!losesByPerpetualCheck(board, move)) {
+            if (!losesByRepetition(board, move)) {
                 return move;
             }
         }

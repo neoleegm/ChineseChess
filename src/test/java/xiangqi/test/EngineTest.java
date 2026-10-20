@@ -27,6 +27,8 @@ final class EngineTest {
         Checks.test("避免立即长将作负", EngineTest::avoidsPerpetualLoss);
         Checks.test("简单档不会把车留在卒口", EngineTest::easyDoesNotHangPieces);
         Checks.test("UCI 局面命令不重复叠加历史", EngineTest::uciPositionCommand);
+        Checks.test("UCI 杀棋步数按回合换算", EngineTest::uciMateConversion);
+        Checks.test("内置引擎给出主变着", EngineTest::internalEngineHasPv);
         Checks.test("自对弈 30 手全部合法", EngineTest::selfPlayLegal);
     }
 
@@ -179,6 +181,37 @@ final class EngineTest {
         placed.place(Piece.Type.KING, false, 0, 3);
         Checks.isTrue(UciEngine.positionCommand(placed).startsWith("position fen "),
                 "摆出来的局面没有历史，用 fen");
+    }
+
+    /**
+     * UCI 的 {@code score mate N} 单位是回合，内部评分是半回合。
+     * 直接当半回合用会让「三步杀」显示成「杀棋 +2」。
+     */
+    private static void uciMateConversion() {
+        UciEngine.Info mate = UciEngine.parseInfoLine(
+                "info depth 18 score mate 3 pv h2e2 h9g7 h0g2", UciEngine.Info.EMPTY);
+        SearchResult result = new SearchResult(null, mate.score(), mate.depth(), 0);
+        Checks.equal("杀棋 +3", result.scoreText(), "mate 3 应显示三步杀");
+        Checks.equal(18, mate.depth(), "深度解析");
+        Checks.equal(3, mate.pv().size(), "主变着解析");
+
+        UciEngine.Info mated = UciEngine.parseInfoLine(
+                "info depth 20 score mate -2", UciEngine.Info.EMPTY);
+        Checks.equal("被杀 -2",
+                new SearchResult(null, mated.score(), mated.depth(), 0).scoreText(), "mate -2");
+
+        UciEngine.Info cp = UciEngine.parseInfoLine(
+                "info depth 12 score cp 35 pv b2e2", UciEngine.Info.EMPTY);
+        Checks.equal(35, cp.score(), "cp 分值原样保留");
+        Checks.equal("+0.35", new SearchResult(null, cp.score(), cp.depth(), 0).scoreText(), "cp 文案");
+    }
+
+    private static void internalEngineHasPv() {
+        Board board = new Board();
+        SearchResult result = new SearchEngine().search(board, SearchLimits.of(5, 600));
+        Checks.notNull(result.move(), "应返回着法");
+        Checks.isTrue(result.pv().size() >= 2, "内置引擎应给出至少两手主变着，实际 " + result.pv().size());
+        Checks.equal(result.move(), result.pv().get(0), "主变着首手应等于最佳着法");
     }
 
     private static void selfPlayLegal() {

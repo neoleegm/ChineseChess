@@ -10,6 +10,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
+import java.util.function.LongSupplier;
 
 /**
  * 对局会话：把「棋盘状态 + 对局元信息 + 着法列表 + 计时 + 复盘」收在一处。
@@ -50,9 +51,20 @@ public final class GameSession {
     private boolean playerIsRed = true;
     private Difficulty difficulty = Difficulty.MEDIUM;
     private GameResult result;
-    private long turnStartNanos = System.nanoTime();
+    private final LongSupplier nanoClock;
+    private long turnStartNanos;
     private int reviewPly = -1;
     private Board reviewBoard;
+
+    public GameSession() {
+        this(System::nanoTime);
+    }
+
+    /** 允许测试注入可控时钟；正常运行时用 {@link System#nanoTime()}。 */
+    public GameSession(LongSupplier nanoClock) {
+        this.nanoClock = nanoClock;
+        this.turnStartNanos = nanoClock.getAsLong();
+    }
 
     // ==================== 配置 ====================
 
@@ -98,7 +110,7 @@ public final class GameSession {
         result = null;
         reviewPly = -1;
         reviewBoard = null;
-        turnStartNanos = System.nanoTime();
+        turnStartNanos = nanoClock.getAsLong();
         notifyListeners();
     }
 
@@ -121,12 +133,22 @@ public final class GameSession {
 
     /**
      * 落子。成功返回 {@code true}，并通知监听者。
+     *
+     * <p>玩家落子会退出复盘（回到实时对局）；AI 落子走
+     * {@link #play(Move, boolean)} 并传 {@code true}，避免玩家正在复盘时被强行拉回。</p>
      */
     public boolean play(Move move) {
+        return play(move, false);
+    }
+
+    /**
+     * @param keepReview {@code true} 表示即使正在复盘也保留复盘视图，只更新着法表
+     */
+    public boolean play(Move move, boolean keepReview) {
         if (result != null || move == null) {
             return false;
         }
-        if (reviewPly >= 0) {
+        if (reviewPly >= 0 && !keepReview) {
             exitReview();
         }
         if (!board.isLegalMove(move)) {
@@ -139,7 +161,7 @@ public final class GameSession {
         }
         entries.add(new MoveEntry(move, notation, elapsed));
         redoStack.clear();
-        turnStartNanos = System.nanoTime();
+        turnStartNanos = nanoClock.getAsLong();
         result = board.result();
         notifyListeners();
         return true;
@@ -158,7 +180,7 @@ public final class GameSession {
             undoOne();
         }
         result = null;
-        turnStartNanos = System.nanoTime();
+        turnStartNanos = nanoClock.getAsLong();
         notifyListeners();
         return true;
     }
@@ -181,7 +203,7 @@ public final class GameSession {
         while (mode == Mode.PVE && !redoStack.isEmpty() && board.isRedTurn() != playerIsRed) {
             redoOne();
         }
-        turnStartNanos = System.nanoTime();
+        turnStartNanos = nanoClock.getAsLong();
         notifyListeners();
         return true;
     }
@@ -198,6 +220,11 @@ public final class GameSession {
 
     public boolean canUndo() {
         if (entries.isEmpty()) {
+            return false;
+        }
+        // 认输 / 议和是「结束对局」的指令，不能靠悔棋撤销；将死、长将这类盘面结果仍可悔
+        if (result != null && (result.reason() == GameResult.Reason.RESIGNATION
+                || result.reason() == GameResult.Reason.AGREEMENT)) {
             return false;
         }
         // 玩家执黑时，棋盘上只有 AI 的开局那一手，悔掉只会让 AI 再走一遍
@@ -227,6 +254,24 @@ public final class GameSession {
         notifyListeners();
     }
 
+    /**
+     * 从终局继续对弈（载入棋谱后使用）：清掉「认输 / 议和」这类外部结果。
+     *
+     * @return 是否成功继续；盘面本身已结束（将死、困毙等）时返回 {@code false}
+     */
+    public boolean resumePlay() {
+        if (result == null) {
+            return false;
+        }
+        result = board.result();
+        if (result != null) {
+            return false;
+        }
+        turnStartNanos = nanoClock.getAsLong();
+        notifyListeners();
+        return true;
+    }
+
     // ==================== 着法列表 ====================
 
     public List<MoveEntry> entries() {
@@ -253,10 +298,10 @@ public final class GameSession {
         if (reviewPly >= 0) {
             return 0;
         }
-        return Math.max(0, (System.nanoTime() - turnStartNanos) / 1_000_000);
+        return Math.max(0, (nanoClock.getAsLong() - turnStartNanos) / 1_000_000);
     }
 
-    /** 红方累计用时（毫秒）。 */
+    /** 红方累计用时（毫秒，只含已走完的着法）。 */
     public long redMillis() {
         long total = 0;
         for (int i = 0; i < entries.size(); i += 2) {
@@ -265,11 +310,32 @@ public final class GameSession {
         return total;
     }
 
-    /** 黑方累计用时（毫秒）。 */
+    /** 黑方累计用时（毫秒，只含已走完的着法）。 */
     public long blackMillis() {
         long total = 0;
         for (int i = 1; i < entries.size(); i += 2) {
             total += entries.get(i).elapsedMs();
+        }
+        return total;
+    }
+
+    /** 红方实时用时：已走完的着法 + 正在进行的这一手（若轮到红方）。 */
+    public long liveRedMillis() {
+        return liveMillis(true);
+    }
+
+    /** 黑方实时用时：已走完的着法 + 正在进行的这一手（若轮到黑方）。 */
+    public long liveBlackMillis() {
+        return liveMillis(false);
+    }
+
+    private long liveMillis(boolean red) {
+        long total = red ? redMillis() : blackMillis();
+        if (result != null || reviewing()) {
+            return total; // 终局或复盘时时钟停住
+        }
+        if (board.isRedTurn() == red) {
+            total += Math.max(0, (nanoClock.getAsLong() - turnStartNanos) / 1_000_000);
         }
         return total;
     }
@@ -335,6 +401,19 @@ public final class GameSession {
 
     /** 用一组着法替换当前对局（用于载入棋谱）。返回成功应用的步数。 */
     public int loadMoves(List<Move> moves, Mode loadedMode, Difficulty loadedDifficulty, boolean loadedPlayerIsRed) {
+        return loadMoves(moves, loadedMode, loadedDifficulty, loadedPlayerIsRed, null);
+    }
+
+    /**
+     * 用一组着法替换当前对局，并还原棋谱里记录的结果。
+     *
+     * <p>认输、议和这类结果不可能从着法重演出来，必须单独传进来，
+     * 否则载入一盘认输的棋谱会变成「还能继续下」。</p>
+     *
+     * @param recordedResult 棋谱里记录的结果；{@code null} 表示由盘面推导
+     */
+    public int loadMoves(List<Move> moves, Mode loadedMode, Difficulty loadedDifficulty,
+                         boolean loadedPlayerIsRed, GameResult recordedResult) {
         mode = loadedMode;
         difficulty = loadedDifficulty;
         playerIsRed = loadedPlayerIsRed;
@@ -358,7 +437,10 @@ public final class GameSession {
             result = board.result();
             applied++;
         }
-        turnStartNanos = System.nanoTime();
+        if (recordedResult != null) {
+            result = recordedResult;
+        }
+        turnStartNanos = nanoClock.getAsLong();
         notifyListeners();
         return applied;
     }

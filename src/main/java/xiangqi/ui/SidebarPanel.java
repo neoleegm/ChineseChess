@@ -159,6 +159,7 @@ public final class SidebarPanel extends JPanel {
         add(Box.createVerticalStrut(10));
 
         hintButton = fullWidth(Ui.button("提示（H）", theme, actions::hint));
+        hintButton.setToolTipText("用困难档引擎给出一手推荐着法（快捷键 H）");
         add(hintButton);
         add(Box.createVerticalStrut(6));
 
@@ -173,7 +174,7 @@ public final class SidebarPanel extends JPanel {
         add(row);
         add(Box.createVerticalStrut(6));
 
-        newGameButton = fullWidth(Ui.button("重新开始（R）", theme, actions::newGame));
+        newGameButton = fullWidth(Ui.button("重新开始", theme, actions::newGame));
         add(newGameButton);
         add(Box.createVerticalStrut(6));
 
@@ -235,7 +236,7 @@ public final class SidebarPanel extends JPanel {
     }
 
     /** 根据会话状态刷新控件。 */
-    public void refresh(GameSession session, boolean thinking, String enginePath) {
+    public void refresh(GameSession session, boolean thinking, String enginePath, String engineStatusText) {
         updating = true;
         try {
             modeControl.setSelectedIndex(session.mode() == GameSession.Mode.PVE ? 0 : 1);
@@ -262,10 +263,31 @@ public final class SidebarPanel extends JPanel {
         resignButton.setEnabled(!session.isOver());
         drawButton.setEnabled(!session.isOver());
 
-        engineStatus.setText(enginePath == null || enginePath.isBlank()
-                ? "未配置，使用内置引擎"
-                : "已配置：" + new File(enginePath).getName());
-        engineStatus.setToolTipText(enginePath);
+        engineStatus.setText(engineStatusLabel(enginePath, engineStatusText));
+        engineStatus.setToolTipText(describeEngine(enginePath, engineStatusText));
+    }
+
+    /** 侧栏引擎状态：把「路径 + 健康检查结果」合成一句人话。 */
+    private String engineStatusLabel(String enginePath, String status) {
+        if (enginePath == null || enginePath.isBlank()) {
+            return "未配置，使用内置引擎";
+        }
+        if (status == null || status.isBlank()) {
+            return "已配置：" + new File(enginePath).getName();
+        }
+        return status.startsWith("可用") || status.startsWith("已就绪")
+                ? "Pikafish 已就绪"
+                : "Pikafish 不可用";
+    }
+
+    private String describeEngine(String enginePath, String status) {
+        if (enginePath == null || enginePath.isBlank()) {
+            return "困难难度使用内置引擎；可指定 Pikafish 可执行文件。";
+        }
+        String name = new File(enginePath).getName();
+        return status == null || status.isBlank()
+                ? name + "（尚未预热）"
+                : name + "：" + status;
     }
 
     public void setSoundSelected(boolean selected) {

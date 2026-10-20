@@ -2,21 +2,25 @@ package xiangqi.ui;
 
 import xiangqi.ai.AiPlayer;
 import xiangqi.ai.Difficulty;
-import xiangqi.ai.Evaluation;
 import xiangqi.ai.SearchResult;
+import xiangqi.ai.UciEngine;
 import xiangqi.audio.SoundBank;
 import xiangqi.core.Board;
 import xiangqi.core.GameResult;
 import xiangqi.core.Move;
 import xiangqi.core.Notation;
-import xiangqi.core.Piece;
+import xiangqi.game.DrawPolicy;
 import xiangqi.game.GameRecord;
 import xiangqi.game.GameSession;
 
+import javax.swing.AbstractAction;
+import javax.swing.ActionMap;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
+import javax.swing.InputMap;
 import javax.swing.JCheckBoxMenuItem;
+import javax.swing.JComponent;
 import javax.swing.JFileChooser;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
@@ -27,16 +31,21 @@ import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.KeyStroke;
 import javax.swing.SwingUtilities;
+import javax.swing.Timer;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.Toolkit;
+import java.awt.event.ActionEvent;
+import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.io.File;
 import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.prefs.Preferences;
 
@@ -68,11 +77,15 @@ public final class MainFrame extends JFrame implements SidebarPanel.Actions {
     private final BoardView boardView = new BoardView();
     private final AiWorker aiWorker = new AiWorker(aiPlayer, "xiangqi-ai");
     private final AiWorker hintWorker = new AiWorker(hintPlayer, "xiangqi-hint");
+    /** 人机对局与提示共用的外部引擎实例（{@code null} 表示只用内置引擎）。 */
+    private UciEngine engine;
 
     private final SidebarPanel sidebar;
     private final RecordPanel recordPanel;
     private final JLabel statusLabel;
     private final JLabel engineLabel;
+    /** 每 500ms 只刷新时钟，避免为了走秒重建整个界面。 */
+    private final Timer clockTimer;
 
     private Theme theme = Theme.WOOD;
     private boolean aiThinking;
@@ -80,6 +93,8 @@ public final class MainFrame extends JFrame implements SidebarPanel.Actions {
     private Move hintMove;
     private boolean resultHandled;
     private String engineSummary = "内置引擎";
+    /** 外部引擎健康检查结果：{@code null} 表示未知，空串表示正常，其余为失败原因。 */
+    private String engineHealth;
     /** 提示结果文案；非空时状态栏优先显示它，直到玩家落子。 */
     private String hintText = "";
 
@@ -113,6 +128,10 @@ public final class MainFrame extends JFrame implements SidebarPanel.Actions {
         boardView.setMoveHandler(this::onHumanMove);
         session.addListener(this::refresh);
         setJMenuBar(createMenuBar());
+        installReviewKeys();
+
+        clockTimer = new Timer(500, e -> recordPanel.updateClocks(session));
+        clockTimer.start();
 
         restoreSettings();
 
@@ -126,22 +145,76 @@ public final class MainFrame extends JFrame implements SidebarPanel.Actions {
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
-                shutdown();
+                requestShutdown();
             }
         });
+
+        // 兜底清理：无论从菜单、Cmd+Q 还是系统强退，都别把 Pikafish 进程留在后台
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            UciEngine current = engine;
+            if (current != null) {
+                current.shutdown();
+            }
+        }, "engine-cleanup"));
 
         refresh();
         maybeStartAiTurn();
         SwingUtilities.invokeLater(sounds::warmUp);
 
-        // 后台预热外部引擎：握手 + 加载神经网络约需数百毫秒，
-        // 放在启动时做掉，第一次按「提示」就不用等
-        Thread warmUp = new Thread(() -> {
-            aiPlayer.warmUp();
-            hintPlayer.warmUp();
-        }, "engine-warmup");
-        warmUp.setDaemon(true);
-        warmUp.start();
+        // 外面引擎只在需要时预热：简单/中等档根本不用它，开局就拉一个 4 线程进程纯属浪费
+        if (session.difficulty() == Difficulty.HARD) {
+            warmEngine();
+        }
+    }
+
+    // ==================== 复盘快捷键 ====================
+
+    /**
+     * 复盘导航用方向键与 Esc，绑在根面板的输入映射上。
+     *
+     * <p>刻意不复用菜单加速键：悔棋已经是 Ctrl/Cmd+Z，如果复盘返回也挂在 U 上，
+     * 玩家想退出复盘就会顺手悔掉一手棋。</p>
+     */
+    private void installReviewKeys() {
+        InputMap input = getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW);
+        ActionMap actions = getRootPane().getActionMap();
+        bindKey(input, actions, "review-prev", KeyStroke.getKeyStroke(KeyEvent.VK_LEFT, 0), this::reviewBack);
+        bindKey(input, actions, "review-next", KeyStroke.getKeyStroke(KeyEvent.VK_RIGHT, 0), this::reviewForward);
+        bindKey(input, actions, "review-start", KeyStroke.getKeyStroke(KeyEvent.VK_HOME, 0), this::reviewStart);
+        bindKey(input, actions, "review-end", KeyStroke.getKeyStroke(KeyEvent.VK_END, 0), this::reviewEnd);
+        bindKey(input, actions, "review-exit", KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), this::reviewEnd);
+    }
+
+    private void bindKey(InputMap input, ActionMap actions, String name, KeyStroke key, Runnable action) {
+        input.put(key, name);
+        actions.put(name, new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                action.run();
+            }
+        });
+    }
+
+    private void reviewBack() {
+        if (session.reviewing()) {
+            session.setReviewPly(session.reviewPly() - 1);
+        }
+    }
+
+    private void reviewForward() {
+        if (session.reviewing()) {
+            session.setReviewPly(session.reviewPly() + 1);
+        }
+    }
+
+    private void reviewStart() {
+        if (session.plyCount() > 0) {
+            session.setReviewPly(0);
+        }
+    }
+
+    private void reviewEnd() {
+        session.exitReview();
     }
 
     // ==================== 菜单 ====================
@@ -151,16 +224,17 @@ public final class MainFrame extends JFrame implements SidebarPanel.Actions {
         JMenuBar bar = new JMenuBar();
 
         JMenu game = new JMenu("对局");
-        game.add(menuItem("重新开始", KeyStroke.getKeyStroke(KeyEvent.VK_R, 0), this::newGame));
-        game.add(menuItem("悔棋", KeyStroke.getKeyStroke(KeyEvent.VK_U, 0), this::undo));
-        game.add(menuItem("重做", KeyStroke.getKeyStroke(KeyEvent.VK_Y, 0), this::redo));
+        game.add(menuItem("重新开始", KeyStroke.getKeyStroke(KeyEvent.VK_N, shortcut), this::newGame));
+        game.add(menuItem("悔棋", KeyStroke.getKeyStroke(KeyEvent.VK_Z, shortcut), this::undo));
+        game.add(menuItem("重做", KeyStroke.getKeyStroke(KeyEvent.VK_Z,
+                shortcut | InputEvent.SHIFT_DOWN_MASK), this::redo));
         game.addSeparator();
         game.add(menuItem("提示", KeyStroke.getKeyStroke(KeyEvent.VK_H, 0), this::hint));
         game.addSeparator();
         game.add(menuItem("认输", null, this::resign));
         game.add(menuItem("求和", null, this::offerDraw));
         game.addSeparator();
-        game.add(menuItem("退出", KeyStroke.getKeyStroke(KeyEvent.VK_Q, 0), this::shutdown));
+        game.add(menuItem("退出", KeyStroke.getKeyStroke(KeyEvent.VK_Q, shortcut), this::requestShutdown));
         bar.add(game);
 
         JMenu record = new JMenu("棋谱");
@@ -222,7 +296,7 @@ public final class MainFrame extends JFrame implements SidebarPanel.Actions {
         boardView.setBusy(aiThinking ? "AI 思考中…" : (hintThinking ? "提示计算中…" : ""));
 
         recordPanel.update(session);
-        sidebar.refresh(session, aiThinking || hintThinking, aiPlayer.enginePath());
+        sidebar.refresh(session, aiThinking || hintThinking, aiPlayer.enginePath(), engineHealth);
         updateStatus();
         engineLabel.setText(engineSummary);
         maybeAnnounceResult();
@@ -236,7 +310,7 @@ public final class MainFrame extends JFrame implements SidebarPanel.Actions {
     private void updateStatus() {
         if (session.reviewing()) {
             int ply = session.reviewPly();
-            statusLabel.setText("复盘：第 " + ply + " 手后（点最新一手或按 U 返回对局）");
+            statusLabel.setText("复盘：第 " + ply + " 手后（←/→ 翻看，Esc 返回对局）");
             return;
         }
         if (session.isOver()) {
@@ -305,7 +379,8 @@ public final class MainFrame extends JFrame implements SidebarPanel.Actions {
                 return;
             }
             boolean capture = session.board().pieceAt(move.to()) != null;
-            if (!session.play(move)) {
+            // 传 keepReview=true：玩家可能正在复盘，AI 应着不应该把他拉回实时局面
+            if (!session.play(move, true)) {
                 refresh();
                 return;
             }
@@ -329,7 +404,7 @@ public final class MainFrame extends JFrame implements SidebarPanel.Actions {
         resultHandled = true;
         GameResult result = session.result();
         boolean playerWon = session.playerIsRed() == result.winnerIsRed() && !result.isDraw();
-        sounds.play(result.isDraw() ? SoundBank.Effect.CHECK
+        sounds.play(result.isDraw() ? SoundBank.Effect.DRAW
                 : (playerWon ? SoundBank.Effect.WIN : SoundBank.Effect.LOSE));
         SwingUtilities.invokeLater(this::showResultDialog);
     }
@@ -377,6 +452,11 @@ public final class MainFrame extends JFrame implements SidebarPanel.Actions {
 
     @Override
     public void undo() {
+        // 复盘时按悔棋键，只退出复盘，不真的悔棋——否则玩家会莫名其妙丢一手
+        if (session.reviewing()) {
+            session.exitReview();
+            return;
+        }
         if (!session.canUndo()) {
             return;
         }
@@ -424,13 +504,15 @@ public final class MainFrame extends JFrame implements SidebarPanel.Actions {
             int confirm = JOptionPane.showConfirmDialog(this, "对方同意和棋吗？", "求和",
                     JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
             if (confirm == JOptionPane.YES_OPTION) {
+                cancelThinking();
                 session.agreeDraw();
             }
             return;
         }
-        int balance = materialBalance();
-        int playerBalance = session.playerIsRed() ? balance : -balance;
-        if (playerBalance <= -150) {
+        cancelThinking();
+        SearchResult last = aiPlayer.lastResult();
+        Integer aiScore = last.move() == null ? null : last.score();
+        if (DrawPolicy.aiAcceptsDraw(session.board(), session.playerIsRed(), aiScore, session.plyCount())) {
             session.agreeDraw();
         } else {
             JOptionPane.showMessageDialog(this, "AI 拒绝了和棋请求，棋局继续。", "求和",
@@ -438,21 +520,14 @@ public final class MainFrame extends JFrame implements SidebarPanel.Actions {
         }
     }
 
-    /** 红方减黑方的子力差（兵=110 计）。 */
-    private int materialBalance() {
-        int balance = 0;
-        for (Piece piece : session.board().pieces()) {
-            int value = Evaluation.VALUE[piece.type().ordinal()];
-            balance += piece.isRed() ? value : -value;
-        }
-        return balance;
-    }
-
     @Override
     public void hint() {
         if (session.isOver() || session.mode() != GameSession.Mode.PVE
                 || !session.isPlayerTurn() || aiThinking || hintThinking) {
             return;
+        }
+        if (engine != null && engineHealth == null) {
+            warmEngine(); // 第一次用提示时再拉起引擎，避免开局常驻进程
         }
         hintThinking = true;
         hintMove = null;
@@ -630,7 +705,8 @@ public final class MainFrame extends JFrame implements SidebarPanel.Actions {
         JFileChooser chooser = new JFileChooser();
         chooser.setDialogTitle("保存棋谱");
         chooser.setFileFilter(new FileNameExtensionFilter("象棋棋谱 (*.xq)", "xq"));
-        chooser.setSelectedFile(new File("对局-" + System.currentTimeMillis() % 100000 + ".xq"));
+        chooser.setSelectedFile(new File("对局-"
+                + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmm")) + ".xq"));
         if (chooser.showSaveDialog(this) != JFileChooser.APPROVE_OPTION) {
             return;
         }
@@ -680,22 +756,51 @@ public final class MainFrame extends JFrame implements SidebarPanel.Actions {
         try {
             GameRecord.Data data = GameRecord.load(chooser.getSelectedFile().toPath());
             cancelThinking();
-            resultHandled = false;
             hintMove = null;
+            hintText = "";
+            // 先假定不需要弹「对局结束」，等确认后再按需覆盖
+            resultHandled = true;
             List<Move> moves = data.moves();
-            int applied = session.loadMoves(moves, data.mode(), data.difficulty(), data.playerIsRed());
+            int applied = session.loadMoves(moves, data.mode(), data.difficulty(),
+                    data.playerIsRed(), data.result());
             prefs.put(PREF_MODE, data.mode().name());
             prefs.put(PREF_DIFFICULTY, data.difficulty().name());
             prefs.put(PREF_SIDE, data.playerIsRed() ? "red" : "black");
             aiPlayer.setDifficulty(data.difficulty());
             boardView.setFlipped(!data.playerIsRed());
             refresh();
-            statusLabel.setText("已载入 " + applied + " 手棋谱");
-            maybeStartAiTurn();
+            if (data.result() != null) {
+                // 棋谱已终局：默认进入复盘，绝不叫 AI 接着走（那会改掉原谱）
+                session.setReviewPly(0);
+                statusLabel.setText("已载入终局棋谱：" + data.result().text());
+                askResumeLoaded();
+            } else {
+                statusLabel.setText("已载入 " + applied + " 手棋谱");
+                maybeStartAiTurn();
+            }
         } catch (Exception e) {
             JOptionPane.showMessageDialog(this, "载入失败：" + e.getMessage(), "载入棋谱",
                     JOptionPane.ERROR_MESSAGE);
         }
+    }
+
+    /** 载入终局棋谱后询问：只复盘，还是从终局继续（仅限盘面本身还没结束的情况）。 */
+    private void askResumeLoaded() {
+        Object[] options = {"仅复盘", "从终局继续"};
+        int choice = JOptionPane.showOptionDialog(this,
+                "这盘棋已结束。可以从开局复盘，也可以从最后局面接着下。",
+                "载入棋谱", JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE,
+                null, options, options[0]);
+        if (choice != 1) {
+            return;
+        }
+        if (!session.resumePlay()) {
+            JOptionPane.showMessageDialog(this, "当前局面已经结束（将死或困毙），无法继续。", "载入棋谱",
+                    JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        resultHandled = false;
+        maybeStartAiTurn();
     }
 
     private Path ensureExtension(Path path, String extension) {
@@ -721,11 +826,81 @@ public final class MainFrame extends JFrame implements SidebarPanel.Actions {
         return choice == JOptionPane.YES_OPTION;
     }
 
+    /** 换引擎：先停掉正在跑的两路搜索，再整体切换，最后销毁旧进程。 */
     private void applyEnginePath(String path) {
-        aiPlayer.setEnginePath(path);
-        hintPlayer.setEnginePath(path);
-        engineSummary = path.isBlank() ? "内置引擎" : new File(path).getName();
+        cancelThinking();
+        UciEngine previous = engine;
+        UciEngine next = path == null || path.isBlank() ? null : new UciEngine(path);
+        engine = next;
+        engineHealth = null;
+        aiPlayer.setEngine(next);
+        hintPlayer.setEngine(next); // 共用同一个实例：UCI 搜索本身串行，开两个进程只会抢 CPU
+        if (previous != null && previous != next) {
+            previous.shutdown();
+        }
+        engineSummary = next == null ? "内置引擎" : new File(path).getName();
         refresh();
+        if (next != null) {
+            warmEngine();
+        }
+    }
+
+    /** 后台做一次握手 + 健康检查，把「缺 nnue / 平台不对」这类问题显示到侧栏。 */
+    private void warmEngine() {
+        UciEngine current = engine;
+        if (current == null) {
+            return;
+        }
+        Thread warmUp = new Thread(() -> {
+            String problem = current.healthCheck();
+            SwingUtilities.invokeLater(() -> {
+                if (engine != current) {
+                    return; // 期间换过引擎，结果作废
+                }
+                engineHealth = problem == null ? "已就绪" : "不可用：" + problem;
+                if (problem != null) {
+                    engineSummary = "Pikafish 不可用，回退内置引擎";
+                }
+                refresh();
+            });
+        }, "engine-warmup");
+        warmUp.setDaemon(true);
+        warmUp.start();
+    }
+
+    /**
+     * 查找内置引擎：优先用户配置，其次 jar 所在目录、当前工作目录、{@code engines/} 子目录。
+     * 双击 jar 启动时工作目录不是项目根目录，只认 cwd 会找不到。
+     */
+    private String locateEngine(String configured) {
+        if (configured != null && !configured.isBlank()) {
+            return configured;
+        }
+        List<Path> candidates = new java.util.ArrayList<>();
+        try {
+            Path jar = Path.of(MainFrame.class.getProtectionDomain().getCodeSource()
+                    .getLocation().toURI()).toAbsolutePath();
+            Path dir = jar.getParent();
+            if (dir != null) {
+                candidates.add(dir.resolve("pikafish"));
+                candidates.add(dir.resolve("pikafish.exe"));
+                candidates.add(dir.resolve("engines/pikafish"));
+                candidates.add(dir.resolve("engines/pikafish.exe"));
+            }
+        } catch (Exception ignored) {
+            // 取不到自身位置时退回工作目录
+        }
+        candidates.add(Path.of("pikafish").toAbsolutePath());
+        candidates.add(Path.of("pikafish.exe").toAbsolutePath());
+        candidates.add(Path.of("engines/pikafish").toAbsolutePath());
+        candidates.add(Path.of("engines/pikafish.exe").toAbsolutePath());
+        for (Path candidate : candidates) {
+            File file = candidate.toFile();
+            if (file.isFile() && file.canExecute()) {
+                return file.getAbsolutePath();
+            }
+        }
+        return "";
     }
 
     private void restoreSettings() {
@@ -742,17 +917,13 @@ public final class MainFrame extends JFrame implements SidebarPanel.Actions {
         hintPlayer.setTimeOverride(2_500);
         sounds.setEnabled(sound);
 
-        String engine = prefs.get(PREF_ENGINE, "");
-        if (engine.isBlank()) {
-            File local = new File("pikafish");
-            if (local.isFile() && local.canExecute()) {
-                engine = local.getAbsolutePath();
-            }
-        }
-        if (!engine.isBlank()) {
-            aiPlayer.setEnginePath(engine);
-            hintPlayer.setEnginePath(engine);
-            engineSummary = new File(engine).getName();
+        String enginePath = locateEngine(prefs.get(PREF_ENGINE, ""));
+        if (!enginePath.isBlank()) {
+            UciEngine shared = new UciEngine(enginePath);
+            engine = shared;
+            aiPlayer.setEngine(shared);
+            hintPlayer.setEngine(shared);
+            engineSummary = new File(enginePath).getName();
         }
 
         session.setMode(GameSession.Mode.valueOf(mode));
@@ -766,11 +937,25 @@ public final class MainFrame extends JFrame implements SidebarPanel.Actions {
         setTheme(theme);
     }
 
+    /** 用户主动退出：对局未结束先确认。 */
+    private void requestShutdown() {
+        if (session.plyCount() > 0 && !session.isOver()) {
+            int choice = JOptionPane.showConfirmDialog(this, "对局尚未结束，确定退出吗？\n（当前棋谱不会自动保存）",
+                    "退出", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+            if (choice != JOptionPane.YES_OPTION) {
+                return;
+            }
+        }
+        shutdown();
+    }
+
     private void shutdown() {
+        clockTimer.stop();
         aiWorker.shutdown();
         hintWorker.shutdown();
-        aiPlayer.shutdown();
-        hintPlayer.shutdown();
+        if (engine != null) {
+            engine.shutdown();
+        }
         sounds.dispose();
         prefs.putInt(PREF_WIDTH, Math.max(880, getWidth()));
         prefs.putInt(PREF_HEIGHT, Math.max(640, getHeight()));

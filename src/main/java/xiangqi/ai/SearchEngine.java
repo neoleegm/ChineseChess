@@ -34,6 +34,10 @@ public final class SearchEngine implements Engine {
     private static final byte EXACT = 0;
     private static final byte LOWER = 1;
     private static final byte UPPER = 2;
+    /** 只存着法、不存分数：分值受重复局面影响时用它，避免污染置换表。 */
+    private static final byte MOVE_ONLY = 3;
+    /** 主变着抽取的最大长度。 */
+    private static final int PV_MAX = 8;
 
     // ---- 置换表 ----
     private final long[] ttKeys = new long[TT_SIZE];
@@ -61,6 +65,11 @@ public final class SearchEngine implements Engine {
     private long deadlineNanos;
     private long nodes;
     private boolean stopped;
+    /**
+     * 搜索过程中命中重复局面的次数。子树里只要命中过，这一层的分值就依赖当前路径，
+     * 不能写进置换表（graph-history interaction），否则换一条路径复用会得到错误结论。
+     */
+    private long repetitionHits;
     /** 根节点容忍度：>0 时在「与最优着法差距不超过该值」的着法里随机挑，用于低难度档。 */
     private int rootMargin;
     private final java.util.Random random = new java.util.Random();
@@ -84,6 +93,7 @@ public final class SearchEngine implements Engine {
         this.nodes = 0;
         this.stopped = false;
         this.aborted = false;
+        this.repetitionHits = 0;
         this.rootMargin = Math.max(0, limits.rootMargin());
         this.deadlineNanos = System.nanoTime() + Math.max(30, limits.timeMs()) * 1_000_000L;
         clearHeuristics();
@@ -133,7 +143,45 @@ public final class SearchEngine implements Engine {
                 break;
             }
         }
-        return new SearchResult(best, bestScore, completed, nodes);
+        return new SearchResult(best, bestScore, completed, nodes, extractPv(best));
+    }
+
+    /**
+     * 从置换表抽取主变着。根节点强制从本次搜索的最优着法起步，
+     * 之后逐步查表、试走，命中缺失 / 非法 / 重复即停止。
+     */
+    private List<Move> extractPv(Move best) {
+        List<Move> pv = new java.util.ArrayList<>(PV_MAX);
+        if (best == null || !board.isLegalMove(best)) {
+            return pv;
+        }
+        pv.add(best);
+        Board scratch = board.copy();
+        if (!scratch.play(best)) {
+            return pv;
+        }
+        for (int i = 1; i < PV_MAX; i++) {
+            Move next = ttMoveAt(scratch);
+            if (next == null || !scratch.play(next)) {
+                break;
+            }
+            pv.add(next);
+        }
+        return pv;
+    }
+
+    /** 读取置换表中记录的最佳着法，并校验它在当前局面上合法。 */
+    private Move ttMoveAt(Board position) {
+        int index = (int) (position.key() & TT_MASK);
+        if (ttKeys[index] != position.key()) {
+            return null;
+        }
+        int packed = ttMoves[index];
+        if (packed == 0) {
+            return null;
+        }
+        Move move = Move.of(Board.moveFrom(packed), Board.moveTo(packed));
+        return position.isLegalMove(move) ? move : null;
     }
 
     private int rootSearch(int depth, int alpha, int beta, int[] bestOut) {
@@ -261,6 +309,7 @@ public final class SearchEngine implements Engine {
 
     private int pvsBody(long key, int depth, int alpha, int beta, int ply,
                         boolean inCheck, boolean allowNull) {
+        long hitsBefore = repetitionHits;
         int ttMove = ttProbeMove(key);
         int ttScore = ttProbe(key, depth, alpha, beta, ply);
         if (ttScore != NO_REPETITION) {
@@ -303,13 +352,17 @@ public final class SearchEngine implements Engine {
             int move = buf[i];
             boolean capture = Board.moveCapture(move) != 0;
             Board.MoveRecord record = board.apply(Board.moveFrom(move), Board.moveTo(move));
+            // 走完之后轮到对方，因此「对方是否被将」就是这手是否将军
+            boolean givesCheck = board.inCheck(board.isRedTurn());
 
             int score;
             if (i == 0) {
                 score = -pvs(depth - 1, -beta, -alpha, ply + 1, true);
             } else {
                 int reduction = 0;
-                if (depth >= 3 && i >= 4 && !capture && !inCheck) {
+                // 将军着、应将着、吃子、杀手着都不削减：它们最可能是最佳着法
+                if (depth >= 3 && i >= 4 && !capture && !inCheck && !givesCheck
+                        && killers[ply][0] != move && killers[ply][1] != move) {
                     reduction = i >= 12 ? 2 : 1;
                 }
                 score = -pvs(depth - 1 - reduction, -alpha - 1, -alpha, ply + 1, true);
@@ -346,7 +399,12 @@ public final class SearchEngine implements Engine {
         if (bestScore <= originalAlpha) {
             flag = UPPER;
         }
-        ttStore(key, depth, flag, bestScore, bestMove, ply);
+        if (repetitionHits == hitsBefore) {
+            ttStore(key, depth, flag, bestScore, bestMove, ply);
+        } else {
+            // 子树里出现过重复局面，分值依赖当前搜索路径，只保留着法用于排序
+            ttStoreMoveOnly(key, depth, bestMove);
+        }
         return bestScore;
     }
 
@@ -360,7 +418,7 @@ public final class SearchEngine implements Engine {
             return evaluate();
         }
         nodes++;
-        if ((nodes & 1023) == 0 && System.nanoTime() >= deadlineNanos) {
+        if ((nodes & 1023) == 0 && (aborted || System.nanoTime() >= deadlineNanos)) {
             stopped = true;
             return 0;
         }
@@ -516,6 +574,7 @@ public final class SearchEngine implements Engine {
         if (previous < 0) {
             return NO_REPETITION;
         }
+        repetitionHits++;
 
         int redMoves = 0;
         int redChecks = 0;
@@ -631,6 +690,22 @@ public final class SearchEngine implements Engine {
         ttDepths[index] = (short) depth;
         ttFlags[index] = flag;
         ttScores[index] = score;
+        ttMoves[index] = move;
+    }
+
+    /** 只存着法（用于分值不可靠的节点）：{@link #ttProbe} 永不命中，{@link #ttProbeMove} 仍可用。 */
+    private void ttStoreMoveOnly(long key, int depth, int move) {
+        if (move == 0) {
+            return;
+        }
+        int index = (int) (key & TT_MASK);
+        if (ttKeys[index] == key && ttDepths[index] > depth) {
+            return;
+        }
+        ttKeys[index] = key;
+        ttDepths[index] = (short) depth;
+        ttFlags[index] = MOVE_ONLY;
+        ttScores[index] = 0;
         ttMoves[index] = move;
     }
 

@@ -35,16 +35,31 @@ public final class UciEngine implements Engine {
 
     private final String enginePath;
     private Process process;
-    private BufferedWriter writer;
+    private volatile BufferedWriter writer;
     private BlockingQueue<String> output;
     private ExecutorService readerPool;
     private Future<?> readerTask;
     private boolean running;
+    /** 是否有搜索正在进行；{@link #stop()} 只在这种情况下才发 stop。 */
+    private volatile boolean searching;
+
+    /** 写管道锁：{@link #stop()} 必须能和阻塞在 {@code waitFor} 里的搜索并行发指令。 */
+    private final Object writeLock = new Object();
+    /** 启动握手期间的输出，用于识别「缺 nnue」这类只能从日志看出来的失败。 */
+    private final StringBuilder startupLog = new StringBuilder();
 
     private volatile String lastInfo = "";
-    private volatile int lastDepth;
-    private volatile int lastScore;
-    private volatile List<Move> lastPv = List.of();
+    private volatile Info lastParsed = Info.EMPTY;
+
+    /**
+     * 一条 UCI {@code info} 行的解析结果。
+     *
+     * @param score 已换算成内部单位（厘兵），杀棋用 {@link SearchResult#MATE_SCORE} 附近的值表示
+     */
+    public record Info(int depth, int score, List<Move> pv, String raw) {
+
+        public static final Info EMPTY = new Info(0, 0, List.of(), "");
+    }
 
     public UciEngine(String enginePath) {
         this.enginePath = enginePath;
@@ -72,11 +87,15 @@ public final class UciEngine implements Engine {
         }
 
         long timeMs = Math.max(200, limits.timeMs());
-        lastDepth = 0;
-        lastScore = 0;
-        lastPv = List.of();
-
+        lastParsed = Info.EMPTY;
+        searching = true;
         try {
+            // 清掉上一次搜索残留的输出（尤其是超时后迟到的 bestmove），
+            // 否则 waitFor 可能把旧结果当成本次结果返回。
+            BlockingQueue<String> queue = output;
+            if (queue != null) {
+                queue.clear();
+            }
             send(positionCommand(board));
             send("go movetime " + timeMs);
             String best = waitFor("bestmove", timeMs + 5_000);
@@ -85,11 +104,69 @@ public final class UciEngine implements Engine {
                 resetAfterFailure();
                 throw new IllegalStateException("无法解析 bestmove: " + best);
             }
-            return new SearchResult(move, lastScore, lastDepth, 0, lastPv);
+            Info info = lastParsed;
+            return new SearchResult(move, info.score(), info.depth(), 0, info.pv());
         } catch (Exception e) {
             resetAfterFailure();
             throw e instanceof RuntimeException runtime ? runtime
                     : new IllegalStateException(e.getMessage(), e);
+        } finally {
+            searching = false;
+        }
+    }
+
+    /**
+     * 请求中止当前搜索：发 UCI {@code stop}，让引擎尽快吐回 bestmove。
+     *
+     * <p>不能加 {@code synchronized}——搜索方法持有对象锁并阻塞在读取上，
+     * 同锁会让 stop 一直排到搜索结束，等于没中止。</p>
+     */
+    public void stop() {
+        if (!searching) {
+            return;
+        }
+        try {
+            synchronized (writeLock) {
+                BufferedWriter out = writer;
+                if (out == null) {
+                    return;
+                }
+                out.write("stop");
+                out.newLine();
+                out.flush();
+            }
+        } catch (Exception ignored) {
+            // 进程正在退出时写管道会抛异常，忽略即可，搜索侧会超时后重置
+        }
+    }
+
+    /**
+     * 尝试握手并跑一次极短搜索；成功返回 {@code null}，失败返回可读原因。
+     *
+     * <p>只握手不够：缺少 {@code pikafish.nnue} 的 Pikafish 能正常回 {@code uciok} 和
+     * {@code readyok}，却会在第一次搜索时直接退出。必须真的让它算一步才算「可用」。</p>
+     */
+    public String healthCheck() {
+        try {
+            synchronized (this) {
+                ensureRunning();
+                Process current = process;
+                if (current == null || !current.isAlive()) {
+                    return "引擎进程已退出";
+                }
+            }
+            SearchResult probe = search(new Board(), SearchLimits.of(1, 150));
+            if (probe.move() == null) {
+                return "引擎没有返回着法";
+            }
+            return null;
+        } catch (Exception e) {
+            String message = e.getMessage() == null ? e.toString() : e.getMessage();
+            boolean suspicious = message.contains("退出") || message.contains("超时")
+                    || message.contains("启动失败");
+            return suspicious
+                    ? message + "（常见原因：缺少 pikafish.nnue，或二进制与本机平台不匹配）"
+                    : message;
         }
     }
 
@@ -136,6 +213,7 @@ public final class UciEngine implements Engine {
 
     private void start() throws Exception {
         shutdownQuietly();
+        startupLog.setLength(0);
 
         File executable = new File(enginePath);
         if (!executable.isFile()) {
@@ -172,6 +250,30 @@ public final class UciEngine implements Engine {
         send("isready");
         waitFor("readyok", READY_TIMEOUT_MS);
         running = true;
+
+        String problem = startupProblem();
+        if (problem != null) {
+            shutdownQuietly();
+            throw new IllegalStateException(problem);
+        }
+    }
+
+    /**
+     * 从握手期间的输出里找可读的失败原因。Pikafish 缺少 {@code pikafish.nnue} 时
+     * 仍然会正常回 uciok，只在 info string 里报错，不主动看日志就会「静默变弱」。
+     */
+    private String startupProblem() {
+        String log = startupLog.toString();
+        if (log.isEmpty()) {
+            return null;
+        }
+        for (String line : log.split("\\R")) {
+            String lower = line.toLowerCase();
+            if (lower.contains("error") || lower.contains("failed") || lower.contains("missing")) {
+                return "引擎报告错误：" + line.trim();
+            }
+        }
+        return null;
     }
 
     private void readLoop() {
@@ -180,7 +282,9 @@ public final class UciEngine implements Engine {
             String line;
             while ((line = reader.readLine()) != null) {
                 if (line.startsWith("info ")) {
-                    parseInfo(line);
+                    Info parsed = parseInfoLine(line, lastParsed);
+                    lastParsed = parsed;
+                    lastInfo = line;
                 }
                 output.offer(line);
             }
@@ -189,27 +293,47 @@ public final class UciEngine implements Engine {
         }
     }
 
-    private void parseInfo(String line) {
+    /**
+     * 解析一条 {@code info} 行。字段缺省时沿用 {@code previous} 的值，
+     * 因为引擎可能只发 {@code info depth 12 score cp 30} 而不带完整信息。
+     */
+    public static Info parseInfoLine(String line, Info previous) {
+        Info base = previous == null ? Info.EMPTY : previous;
+        int depth = base.depth();
+        int score = base.score();
+        List<Move> pv = base.pv();
         String[] parts = line.split("\\s+");
         for (int i = 1; i < parts.length - 1; i++) {
             switch (parts[i]) {
-                case "depth" -> lastDepth = parseInt(parts[i + 1], lastDepth);
+                case "depth" -> depth = parseInt(parts[i + 1], depth);
                 case "score" -> {
-                    if ("cp".equals(parts[i + 1])) {
-                        lastScore = parseInt(parts[i + 2], lastScore);
-                    } else if ("mate".equals(parts[i + 1])) {
-                        int mateIn = parseInt(parts[i + 2], 0);
-                        lastScore = mateIn > 0
-                                ? SearchResult.MATE_SCORE - mateIn
-                                : -SearchResult.MATE_SCORE - mateIn;
+                    if ("cp".equals(parts[i + 1]) && i + 2 < parts.length) {
+                        score = parseInt(parts[i + 2], score);
+                    } else if ("mate".equals(parts[i + 1]) && i + 2 < parts.length) {
+                        score = mateToScore(parseInt(parts[i + 2], 0));
                     }
                 }
-                case "pv" -> lastPv = parsePv(parts, i + 1);
+                case "pv" -> pv = parsePv(parts, i + 1);
                 default -> {
                 }
             }
         }
-        lastInfo = line;
+        return new Info(depth, score, pv, line);
+    }
+
+    /**
+     * UCI 的 {@code score mate N} 单位是<strong>回合</strong>（红走一步 + 黑走一步算一回合），
+     * 内部评分用<strong>半回合</strong>编码（{@code MATE_SCORE - plies}），这里做换算。
+     * 直接把 N 当半回合会让「三步杀」显示成「杀棋 +2」。
+     */
+    public static int mateToScore(int mateIn) {
+        if (mateIn == 0) {
+            return -SearchResult.MATE_SCORE; // 轮到自己被将死
+        }
+        int plies = mateIn > 0 ? 2 * mateIn - 1 : 2 * Math.abs(mateIn);
+        return mateIn > 0
+                ? SearchResult.MATE_SCORE - plies
+                : -SearchResult.MATE_SCORE + plies;
     }
 
     private static List<Move> parsePv(String[] parts, int from) {
@@ -282,12 +406,15 @@ public final class UciEngine implements Engine {
     // ==================== 协议读写 ====================
 
     private void send(String command) throws Exception {
-        if (writer == null) {
-            throw new IllegalStateException("引擎未启动");
+        synchronized (writeLock) {
+            BufferedWriter out = writer;
+            if (out == null) {
+                throw new IllegalStateException("引擎未启动");
+            }
+            out.write(command);
+            out.newLine();
+            out.flush();
         }
-        writer.write(command);
-        writer.newLine();
-        writer.flush();
     }
 
     private String waitFor(String token, long timeoutMs) throws Exception {
@@ -299,6 +426,9 @@ public final class UciEngine implements Engine {
         while (System.nanoTime() < deadline) {
             long remaining = Math.max(1, (deadline - System.nanoTime()) / 1_000_000L);
             String line = queue.poll(Math.min(100, remaining), TimeUnit.MILLISECONDS);
+            if (line != null && (!line.startsWith("info ") || line.startsWith("info string"))) {
+                startupLog.append(line).append('\n');
+            }
             if (line != null && line.startsWith(token)) {
                 return line;
             }

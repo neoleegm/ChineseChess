@@ -22,5 +22,7 @@ Thumbs.db
 *.swp
 *~
 
-# Pikafish 神经网络（大二进制，从官方发布包获取）
+# 外部引擎（二进制与神经网络都按平台区分，不入库；用 scripts/fetch-pikafish.sh 获取）
+pikafish
 pikafish.nnue
+engines/

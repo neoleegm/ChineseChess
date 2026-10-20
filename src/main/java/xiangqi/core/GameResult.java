@@ -13,7 +13,10 @@ public record GameResult(Outcome outcome, Reason reason) {
         CHECKMATE("将死"),
         STALEMATE("困毙"),
         PERPETUAL_CHECK("长将作负"),
+        PERPETUAL_CHASE("长捉作负"),
         REPETITION("三次重复局面"),
+        MOVE_LIMIT("自然限着判和"),
+        INSUFFICIENT_MATERIAL("子力不足判和"),
         RESIGNATION("认输"),
         TIMEOUT("超时"),
         AGREEMENT("双方同意");
@@ -61,6 +64,7 @@ public record GameResult(Outcome outcome, Reason reason) {
             case CHECKMATE -> loser + "被将死，" + winner + "获胜";
             case STALEMATE -> loser + "困毙，" + winner + "获胜";
             case PERPETUAL_CHECK -> loser + "长将作负，" + winner + "获胜";
+            case PERPETUAL_CHASE -> loser + "长捉作负，" + winner + "获胜";
             case RESIGNATION -> loser + "认输，" + winner + "获胜";
             case TIMEOUT -> loser + "超时，" + winner + "获胜";
             default -> winner + "获胜";

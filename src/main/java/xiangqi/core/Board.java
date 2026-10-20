@@ -82,6 +82,10 @@ public final class Board implements Cloneable {
     private boolean fromInitialPosition = true;
     private long key;
     private RepetitionOutcome repetitionOutcome = RepetitionOutcome.NONE;
+    /** 重复局面的具体原因（长将 / 长捉 / 判和），供结果文案使用。 */
+    private GameResult.Reason repetitionReason;
+    /** 距离上一次吃子的半回合数，用于自然限着判和与 FEN 的半回合计数。 */
+    private int pliesSinceCapture;
 
     public Board() {
         reset();
@@ -108,7 +112,8 @@ public final class Board implements Cloneable {
         }
         for (MoveRecord record : other.history) {
             history.add(new MoveRecord(record.from, record.to, map.get(record.piece),
-                    map.get(record.captured), record.redTurnBefore, record.givesCheck));
+                    map.get(record.captured), record.redTurnBefore, record.givesCheck,
+                    record.chases, record.pliesSinceCaptureBefore));
         }
         positionKeys.addAll(other.positionKeys);
         repetitions.putAll(other.repetitions);
@@ -117,6 +122,8 @@ public final class Board implements Cloneable {
         fromInitialPosition = other.fromInitialPosition;
         key = other.key;
         repetitionOutcome = other.repetitionOutcome;
+        repetitionReason = other.repetitionReason;
+        pliesSinceCapture = other.pliesSinceCapture;
     }
 
     // ==================== 查询 ====================
@@ -700,11 +707,16 @@ public final class Board implements Cloneable {
             return false;
         }
         record.givesCheck = inCheck(!piece.isRed());
+        record.chases = detectChase(record);
+        record.pliesSinceCaptureBefore = pliesSinceCapture;
+        pliesSinceCapture = record.captured == null ? pliesSinceCapture + 1 : 0;
         history.add(record);
         positionKeys.add(key);
         repetitions.merge(key, 1, Integer::sum);
         if (repetitions.get(key) >= 3) {
-            repetitionOutcome = adjudicateRepetition();
+            RepetitionRules.Verdict verdict = RepetitionRules.adjudicate(positionKeys, history);
+            repetitionOutcome = verdict.outcome();
+            repetitionReason = verdict.reason();
         }
         return true;
     }
@@ -721,54 +733,152 @@ public final class Board implements Cloneable {
             return updated <= 0 ? null : updated;
         });
         revert(record);
+        pliesSinceCapture = record.pliesSinceCaptureBefore;
         repetitionOutcome = RepetitionOutcome.NONE;
+        repetitionReason = null;
         return true;
     }
 
     /**
-     * 三次重复裁决：只统计「当前局面」与「上一次相同局面」之间的最近一个循环，
-     * 避免更早的将军历史污染长将判定。
+     * 判断这一手是否构成「捉」：走完之后，这枚子<em>新</em>攻击到一个有价值的敌子。
+     *
+     * <p>口径（工程近似，见 {@link RepetitionRules}）：</p>
+     * <ul>
+     *   <li>攻击方排除将帅与兵卒（兵卒抓子不按长捉处理，避免大量误判）；</li>
+     *   <li>被攻击方排除将帅与兵卒；</li>
+     *   <li>这枚子在走之前就能攻击到的目标不算「新捉」；</li>
+     *   <li>目标有保护、且攻击方子力价值不低于目标时不算捉（兑子不是捉）。</li>
+     * </ul>
      */
-    private RepetitionOutcome adjudicateRepetition() {
-        long target = key;
-        int previous = -1;
-        for (int i = positionKeys.size() - 2; i >= 0; i--) {
-            if (positionKeys.get(i) == target) {
-                previous = i;
-                break;
+    private boolean detectChase(MoveRecord record) {
+        Piece mover = record.piece;
+        Piece.Type type = mover.type();
+        if (type == Piece.Type.KING || type == Piece.Type.PAWN) {
+            return false;
+        }
+        for (Piece target : pieces) {
+            if (target.isRed() == mover.isRed()) {
+                continue;
             }
+            if (target.type() == Piece.Type.KING || target.type() == Piece.Type.PAWN) {
+                continue;
+            }
+            int square = target.square();
+            if (!attacksFrom(mover, record.to, -1, square)) {
+                continue;
+            }
+            if (attacksFrom(mover, record.from, record.to, square)) {
+                continue; // 走之前就能吃到，不是这手造成的威胁
+            }
+            if (isDefended(target, square) && type.value() >= target.type().value()) {
+                continue; // 有根且换子不赚，不按捉处理
+            }
+            return true;
         }
-        if (previous < 0) {
-            return RepetitionOutcome.DRAW;
-        }
+        return false;
+    }
 
-        int redMoves = 0;
-        int redChecks = 0;
-        int blackMoves = 0;
-        int blackChecks = 0;
-        for (int i = previous; i < history.size(); i++) {
-            MoveRecord record = history.get(i);
-            if (record.piece.isRed()) {
-                redMoves++;
-                if (record.givesCheck) {
-                    redChecks++;
+    /** {@code target} 是否有同方棋子保护（将帅不计：被牵制的将不敢回吃）。 */
+    private boolean isDefended(Piece target, int square) {
+        boolean byRed = target.isRed();
+        for (Piece guard : pieces) {
+            if (guard == target || guard.isRed() != byRed || guard.type() == Piece.Type.KING) {
+                continue;
+            }
+            if (attacksFrom(guard, guard.square(), -1, square)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 假设 {@code piece} 站在 {@code from} 格，它能否攻击到 {@code target} 格。
+     *
+     * <p>{@code ignoreBlockAt} 指定的格子在扫描时被当成空格，用于「这枚子已走开 / 还没走到」
+     * 的假设摆位——否则它会挡住自己原来的射线。</p>
+     */
+    private boolean attacksFrom(Piece piece, int from, int ignoreBlockAt, int target) {
+        int fromRow = from / COLS;
+        int fromCol = from % COLS;
+        int row = target / COLS;
+        int col = target % COLS;
+        int dr = row - fromRow;
+        int dc = col - fromCol;
+        if (dr == 0 && dc == 0) {
+            return false;
+        }
+        switch (piece.type()) {
+            case ROOK -> {
+                if (dr != 0 && dc != 0) {
+                    return false;
                 }
-            } else {
-                blackMoves++;
-                if (record.givesCheck) {
-                    blackChecks++;
+                return countBlockers(fromRow, fromCol, row, col, ignoreBlockAt) == 0;
+            }
+            case CANNON -> {
+                if (dr != 0 && dc != 0) {
+                    return false;
+                }
+                return countBlockers(fromRow, fromCol, row, col, ignoreBlockAt) == 1;
+            }
+            case HORSE -> {
+                if (!((Math.abs(dr) == 2 && Math.abs(dc) == 1)
+                        || (Math.abs(dr) == 1 && Math.abs(dc) == 2))) {
+                    return false;
+                }
+                int legRow = Math.abs(dr) == 2 ? (fromRow + row) / 2 : fromRow;
+                int legCol = Math.abs(dr) == 2 ? fromCol : (fromCol + col) / 2;
+                int leg = legRow * COLS + legCol;
+                return leg == ignoreBlockAt || cells[leg] == null;
+            }
+            case ELEPHANT -> {
+                if (Math.abs(dr) != 2 || Math.abs(dc) != 2) {
+                    return false;
+                }
+                int eye = (fromRow + row) / 2 * COLS + (fromCol + col) / 2;
+                return eye == ignoreBlockAt || cells[eye] == null;
+            }
+            case ADVISOR -> {
+                return Math.abs(dr) == 1 && Math.abs(dc) == 1;
+            }
+            case KING -> {
+                return Math.abs(dr) + Math.abs(dc) == 1;
+            }
+            case PAWN -> {
+                int forward = piece.isRed() ? -1 : 1;
+                if (dr == forward && dc == 0) {
+                    return true;
+                }
+                boolean crossed = piece.isRed() ? fromRow <= 4 : fromRow >= 5;
+                return crossed && dr == 0 && Math.abs(dc) == 1;
+            }
+            default -> {
+                return false;
+            }
+        }
+    }
+
+    /** 射线上的棋子数（不含两端，{@code ignoreBlockAt} 视为空格）。 */
+    private int countBlockers(int fromRow, int fromCol, int toRow, int toCol, int ignoreBlockAt) {
+        int count = 0;
+        if (fromRow == toRow) {
+            int step = toCol > fromCol ? 1 : -1;
+            for (int c = fromCol + step; c != toCol; c += step) {
+                int square = fromRow * COLS + c;
+                if (square != ignoreBlockAt && cells[square] != null) {
+                    count++;
+                }
+            }
+        } else {
+            int step = toRow > fromRow ? 1 : -1;
+            for (int r = fromRow + step; r != toRow; r += step) {
+                int square = r * COLS + fromCol;
+                if (square != ignoreBlockAt && cells[square] != null) {
+                    count++;
                 }
             }
         }
-        boolean redAllCheck = redMoves > 0 && redChecks == redMoves;
-        boolean blackAllCheck = blackMoves > 0 && blackChecks == blackMoves;
-        if (redAllCheck && !blackAllCheck) {
-            return RepetitionOutcome.RED_LOSES;
-        }
-        if (blackAllCheck && !redAllCheck) {
-            return RepetitionOutcome.BLACK_LOSES;
-        }
-        return RepetitionOutcome.DRAW;
+        return count;
     }
 
     // ==================== 终局 ====================
@@ -777,15 +887,21 @@ public final class Board implements Cloneable {
         return result() != null;
     }
 
+    /** 自然限着：连续 120 个半回合（60 回合）没有吃子，判和。 */
+    public static final int NATURAL_DRAW_PLIES = 120;
+
     /** 对局结果；未结束时返回 {@code null}。 */
     public GameResult result() {
         switch (repetitionOutcome) {
             case DRAW:
-                return GameResult.draw(GameResult.Reason.REPETITION);
+                return GameResult.draw(repetitionReason == null
+                        ? GameResult.Reason.REPETITION : repetitionReason);
             case RED_LOSES:
-                return GameResult.blackWins(GameResult.Reason.PERPETUAL_CHECK);
+                return GameResult.blackWins(repetitionReason == null
+                        ? GameResult.Reason.PERPETUAL_CHECK : repetitionReason);
             case BLACK_LOSES:
-                return GameResult.redWins(GameResult.Reason.PERPETUAL_CHECK);
+                return GameResult.redWins(repetitionReason == null
+                        ? GameResult.Reason.PERPETUAL_CHECK : repetitionReason);
             default:
                 break;
         }
@@ -811,7 +927,40 @@ public final class Board implements Cloneable {
             GameResult.Reason reason = checked ? GameResult.Reason.CHECKMATE : GameResult.Reason.STALEMATE;
             return redTurn ? GameResult.blackWins(reason) : GameResult.redWins(reason);
         }
+        if (pliesSinceCapture >= NATURAL_DRAW_PLIES) {
+            return GameResult.draw(GameResult.Reason.MOVE_LIMIT);
+        }
+        if (insufficientMaterial()) {
+            return GameResult.draw(GameResult.Reason.INSUFFICIENT_MATERIAL);
+        }
         return null;
+    }
+
+    /**
+     * 双方都没有车、马、炮、兵（只剩将士象）时无法成杀，判和。
+     * 兵被计入「有攻击力」的一方：单兵过河仍可能取胜，保守不判和。
+     */
+    private boolean insufficientMaterial() {
+        for (Piece piece : pieces) {
+            switch (piece.type()) {
+                case ROOK, CANNON, HORSE, PAWN -> {
+                    return false;
+                }
+                default -> {
+                }
+            }
+        }
+        return true;
+    }
+
+    /** 距离上一次吃子的半回合数（FEN 的半回合计数）。 */
+    public int pliesSinceCapture() {
+        return pliesSinceCapture;
+    }
+
+    /** 供 FEN 解析还原半回合计数。 */
+    public void setPliesSinceCapture(int plies) {
+        this.pliesSinceCapture = Math.max(0, plies);
     }
 
     public boolean isCheckmate(boolean isRed) {
@@ -853,6 +1002,8 @@ public final class Board implements Cloneable {
         fromInitialPosition = true;
         key = 0;
         repetitionOutcome = RepetitionOutcome.NONE;
+        repetitionReason = null;
+        pliesSinceCapture = 0;
         setupInitialPosition();
         positionKeys.add(key);
         repetitions.put(key, 1);
@@ -926,6 +1077,8 @@ public final class Board implements Cloneable {
         fromInitialPosition = false;
         key = 0;
         repetitionOutcome = RepetitionOutcome.NONE;
+        repetitionReason = null;
+        pliesSinceCapture = 0;
         positionKeys.add(0L);
         repetitions.put(0L, 1);
     }
@@ -969,14 +1122,25 @@ public final class Board implements Cloneable {
         private final Piece captured;
         private final boolean redTurnBefore;
         private boolean givesCheck;
+        /** 这一手走完是否「新捉到」对方一个有价值的子（长捉裁决用）。 */
+        private boolean chases;
+        /** 走这手之前「距离上次吃子」的半回合数，悔棋时还原。 */
+        private int pliesSinceCaptureBefore;
 
-        MoveRecord(int from, int to, Piece piece, Piece captured, boolean redTurnBefore, boolean givesCheck) {
+        MoveRecord(int from, int to, Piece piece, Piece captured, boolean redTurnBefore,
+                   boolean givesCheck, boolean chases, int pliesSinceCaptureBefore) {
             this.from = from;
             this.to = to;
             this.piece = piece;
             this.captured = captured;
             this.redTurnBefore = redTurnBefore;
             this.givesCheck = givesCheck;
+            this.chases = chases;
+            this.pliesSinceCaptureBefore = pliesSinceCaptureBefore;
+        }
+
+        MoveRecord(int from, int to, Piece piece, Piece captured, boolean redTurnBefore, boolean givesCheck) {
+            this(from, to, piece, captured, redTurnBefore, givesCheck, false, 0);
         }
 
         public int from() {
@@ -1001,6 +1165,11 @@ public final class Board implements Cloneable {
 
         public boolean givesCheck() {
             return givesCheck;
+        }
+
+        /** 这一手是否构成「捉」（长捉裁决用）。 */
+        public boolean chases() {
+            return chases;
         }
     }
 }

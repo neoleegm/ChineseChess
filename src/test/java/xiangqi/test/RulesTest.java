@@ -38,7 +38,12 @@ final class RulesTest {
         Checks.test("困毙判定", RulesTest::stalemate);
         Checks.test("三次重复判和", RulesTest::threefoldDraw);
         Checks.test("长将作负", RulesTest::perpetualCheckLoses);
+        Checks.test("长捉作负", RulesTest::perpetualChaseLoses);
+        Checks.test("双方都有捉但都不连续判和", RulesTest::mutualChaseIsDraw);
         Checks.test("非长将的重复不判负", RulesTest::repetitionWithoutCheckIsDraw);
+        Checks.test("自然限着判和", RulesTest::naturalMoveLimitDraws);
+        Checks.test("子力不足判和", RulesTest::insufficientMaterialDraws);
+        Checks.test("FEN 半回合计数随吃子归零", RulesTest::halfmoveClockTracksCaptures);
         Checks.test("随机对局悔棋可完全还原", RulesTest::undoConsistency);
         Checks.test("克隆棋盘与原件互不影响", RulesTest::cloneIsolation);
         Checks.test("克隆悔棋可还原被吃子", RulesTest::cloneUndoWithCapture);
@@ -377,8 +382,101 @@ final class RulesTest {
         Board board = new Board();
         Checks.isTrue(board.play(new Move(7, 1, 7, 4)), "炮八平五");
         Checks.isTrue(board.play(new Move(0, 1, 2, 2)), "马2进3");
-        Checks.equal("r1bakabnr/9/1cn4c1/p1p1p1p1p/9/9/P1P1P1P1P/4C2C1/9/RNBAKABNR w - - 0 2",
+        // 半回合计数：连续两手没有吃子，所以是 2（FEN 第 5 段）
+        Checks.equal("r1bakabnr/9/1cn4c1/p1p1p1p1p/9/9/P1P1P1P1P/4C2C1/9/RNBAKABNR w - - 2 2",
                 Fen.toFen(board), "中局 FEN");
+    }
+
+    /**
+     * 长捉：红车在两格之间来回，每一手都新捉住一只无根黑马；黑马每次逃开。
+     * 循环里红方每步都在捉，黑方只是在逃，按规则红方长捉作负。
+     */
+    private static void perpetualChaseLoses() {
+        Board board = empty();
+        board.place(Piece.Type.KING, true, 9, 4);
+        board.place(Piece.Type.KING, false, 0, 3);
+        board.place(Piece.Type.ROOK, true, 3, 0);
+        board.place(Piece.Type.HORSE, false, 1, 7);
+
+        int[][] cycle = {
+                {3, 0, 1, 0}, {1, 7, 3, 6},
+                {1, 0, 3, 0}, {3, 6, 1, 7}
+        };
+        for (int round = 0; round < 2; round++) {
+            for (int[] move : cycle) {
+                Checks.isTrue(board.play(new Move(move[0], move[1], move[2], move[3])),
+                        "长捉序列应可走：" + move[0] + "," + move[1] + "->" + move[2] + "," + move[3]);
+            }
+        }
+        Checks.isTrue(board.isGameOver(), "第三次重复应终局");
+        Checks.equal(Board.RepetitionOutcome.RED_LOSES, board.repetitionOutcome(), "红方长捉作负");
+        Checks.equal(GameResult.Reason.PERPETUAL_CHASE, board.result().reason(), "原因是长捉");
+        Checks.isTrue(board.result().text().contains("长捉"), "文案包含长捉");
+    }
+
+    /**
+     * 双方各有一次「捉」的循环：红车捉黑马、黑车捉红马，但两边都是「捉一手、逃一手」，
+     * 不构成连续长打，应判和。
+     */
+    private static void mutualChaseIsDraw() {
+        Board board = empty();
+        board.place(Piece.Type.KING, true, 9, 4);
+        board.place(Piece.Type.KING, false, 0, 3);
+        board.place(Piece.Type.ROOK, true, 3, 0);
+        board.place(Piece.Type.ROOK, false, 8, 0);
+        board.place(Piece.Type.HORSE, false, 1, 7);
+        board.place(Piece.Type.HORSE, true, 6, 2);
+
+        int[][] cycle = {
+                {3, 0, 1, 0}, {8, 0, 6, 0},   // 红车捉马 / 黑车捉马
+                {6, 2, 8, 3}, {1, 7, 3, 6},   // 红马逃 / 黑马逃
+                {1, 0, 3, 0}, {6, 0, 8, 0},   // 红车捉马 / 黑车捉马
+                {8, 3, 6, 2}, {3, 6, 1, 7}    // 红马逃 / 黑马逃
+        };
+        for (int round = 0; round < 2; round++) {
+            for (int[] move : cycle) {
+                Checks.isTrue(board.play(new Move(move[0], move[1], move[2], move[3])),
+                        "循环着法应可走：" + move[0] + "," + move[1] + "->" + move[2] + "," + move[3]);
+            }
+        }
+        Checks.isTrue(board.isGameOver(), "第三次重复应终局");
+        Checks.equal(Board.RepetitionOutcome.DRAW, board.repetitionOutcome(), "双方都不连续长打，判和");
+        Checks.equal(GameResult.Reason.REPETITION, board.result().reason(), "原因是三次重复");
+    }
+
+    private static void naturalMoveLimitDraws() {
+        // 从 FEN 还原到「已经 119 个半回合没吃子」，再走一步就到 120
+        Board board = Fen.parse("3k5/9/9/9/9/9/9/9/9/4K4 w - - 119 60");
+        Checks.equal(119, board.pliesSinceCapture(), "FEN 还原半回合计数");
+        Checks.isTrue(board.play(new Move(9, 4, 8, 4)), "帅进一");
+        Checks.equal(GameResult.Reason.MOVE_LIMIT, board.result().reason(), "自然限着判和");
+        Checks.isTrue(board.result().isDraw(), "结果是和棋");
+
+        // 吃子会清零
+        Board eaten = Fen.parse("3k5/9/9/9/9/9/9/9/3pR4/4K4 w - - 40 40");
+        Checks.isTrue(eaten.play(new Move(8, 4, 8, 3)), "车吃卒");
+        Checks.equal(0, eaten.pliesSinceCapture(), "吃子后计数归零");
+    }
+
+    private static void insufficientMaterialDraws() {
+        Board board = Fen.parse("2bakab2/9/9/9/9/9/9/9/9/3K5 w - - 0 40");
+        Checks.equal(GameResult.Reason.INSUFFICIENT_MATERIAL, board.result().reason(), "只剩将士象判和");
+        Checks.isTrue(board.result().isDraw(), "结果是和棋");
+
+        Board withRook = Fen.parse("2bakab2/9/9/9/9/9/9/9/9/2RK5 w - - 0 40");
+        Checks.equal(null, withRook.result(), "还有车时不能判和");
+    }
+
+    private static void halfmoveClockTracksCaptures() {
+        Board board = new Board();
+        Checks.equal(0, board.pliesSinceCapture(), "开局为 0");
+        board.play(new Move(7, 1, 7, 4));
+        board.play(new Move(0, 1, 2, 2));
+        Checks.equal(2, board.pliesSinceCapture(), "两个半回合");
+        Checks.isTrue(board.play(new Move(7, 4, 3, 4)), "炮打卒");
+        Checks.equal(0, board.pliesSinceCapture(), "吃子后归零");
+        Checks.isTrue(board.undo(), "悔棋");
+        Checks.equal(2, board.pliesSinceCapture(), "悔棋还原计数");
     }
 
     private static void notation() {

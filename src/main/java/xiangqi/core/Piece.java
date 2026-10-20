@@ -11,22 +11,24 @@ public final class Piece implements Cloneable {
 
     /** 棋子类型。ordinal 顺序即 Zobrist / 评估表的索引顺序，不可随意调整。 */
     public enum Type {
-        KING("帅", "将", 'k'),
-        ADVISOR("仕", "士", 'a'),
-        ELEPHANT("相", "象", 'b'),
-        HORSE("傌", "马", 'n'),
-        ROOK("俥", "车", 'r'),
-        CANNON("炮", "砲", 'c'),
-        PAWN("兵", "卒", 'p');
+        KING("帅", "将", 'k', 100_000),
+        ADVISOR("仕", "士", 'a', 220),
+        ELEPHANT("相", "象", 'b', 220),
+        HORSE("傌", "马", 'n', 480),
+        ROOK("俥", "车", 'r', 950),
+        CANNON("炮", "砲", 'c', 520),
+        PAWN("兵", "卒", 'p', 110);
 
         private final String redName;
         private final String blackName;
         private final char fenLetter;
+        private final int value;
 
-        Type(String redName, String blackName, char fenLetter) {
+        Type(String redName, String blackName, char fenLetter, int value) {
             this.redName = redName;
             this.blackName = blackName;
             this.fenLetter = fenLetter;
+            this.value = value;
         }
 
         public String name(boolean isRed) {
@@ -35,6 +37,14 @@ public final class Piece implements Cloneable {
 
         public char fenLetter() {
             return fenLetter;
+        }
+
+        /**
+         * 子力价值（以「兵 = 100」为基准）。评估函数与「捉子」判定共用同一张表，
+         * 避免规则层和搜索层各写一份、改一处忘一处。
+         */
+        public int value() {
+            return value;
         }
 
         public static Type fromFenLetter(char letter) {

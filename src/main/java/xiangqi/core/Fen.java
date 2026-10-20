@@ -36,7 +36,8 @@ public final class Fen {
             }
         }
         int fullMoves = board.historySize() / 2 + 1;
-        fen.append(board.isRedTurn() ? " w - - 0 " : " b - - 0 ").append(fullMoves);
+        fen.append(board.isRedTurn() ? " w - - " : " b - - ")
+                .append(board.pliesSinceCapture()).append(' ').append(fullMoves);
         return fen.toString();
     }
 
@@ -79,6 +80,13 @@ public final class Fen {
         }
         if (parts.length > 1) {
             board.setRedTurn(!"b".equalsIgnoreCase(parts[1]));
+        }
+        if (parts.length > 4) {
+            try {
+                board.setPliesSinceCapture(Integer.parseInt(parts[4]));
+            } catch (NumberFormatException ignored) {
+                // 半回合计数非法时保持默认值，不影响局面本身
+            }
         }
         return board;
     }
